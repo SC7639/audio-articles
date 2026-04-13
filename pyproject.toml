@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "audio-articles"
+version = "0.1.0"
+description = "Convert web articles into concise audiobooks using Claude and OpenAI TTS"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.25",
+    "openai>=1.30",
+    "trafilatura>=1.9",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "typer>=0.12",
+    "rich>=13.7",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.14",
+    "httpx",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+audio-articles = "audio_articles.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audio_articles"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

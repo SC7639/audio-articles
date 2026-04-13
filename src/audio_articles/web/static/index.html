@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audio Articles</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+  <style>
+    body { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: var(--pico-muted-color); margin-bottom: 2rem; }
+    #source-toggle { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    #source-toggle button { flex: 1; }
+    #script-preview { display: none; margin-top: 1.5rem; }
+    #script-preview pre { white-space: pre-wrap; word-break: break-word; background: var(--pico-code-background-color); padding: 1rem; border-radius: 4px; }
+    #audio-section { display: none; margin-top: 1.5rem; }
+    audio { width: 100%; }
+    .error { color: var(--pico-del-color); margin-top: 0.75rem; }
+    .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+    .actions button { flex: 1; }
+    #spinner { display: none; }
+    small.hint { color: var(--pico-muted-color); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Audio Articles</h1>
+    <p class="subtitle">Convert any web article into a concise MP3 audiobook.</p>
+  </header>
+
+  <main>
+    <div id="source-toggle">
+      <button id="btn-url" onclick="setMode('url')">URL</button>
+      <button id="btn-text" onclick="setMode('text')" class="secondary">Paste text</button>
+    </div>
+
+    <div id="url-section">
+      <label for="url-input">Article URL</label>
+      <input id="url-input" type="url" placeholder="https://example.com/article" />
+    </div>
+
+    <div id="text-section" style="display:none">
+      <label for="text-input">Article text</label>
+      <textarea id="text-input" rows="8" placeholder="Paste the article text here…"></textarea>
+      <label for="title-input">Title <small class="hint">(optional)</small></label>
+      <input id="title-input" type="text" placeholder="Article title" />
+    </div>
+
+    <label for="voice-select">Voice</label>
+    <select id="voice-select">
+      <option value="onyx">Onyx (deep, male)</option>
+      <option value="alloy">Alloy (neutral)</option>
+      <option value="echo">Echo (male)</option>
+      <option value="fable">Fable (expressive, male)</option>
+      <option value="nova">Nova (female)</option>
+      <option value="shimmer">Shimmer (female)</option>
+    </select>
+
+    <div class="actions">
+      <button id="btn-preview" onclick="previewScript()" class="secondary">Preview script</button>
+      <button id="btn-convert" onclick="convertAudio()">Generate audio</button>
+    </div>
+
+    <div id="spinner" aria-busy="true">Working…</div>
+    <p id="error-msg" class="error"></p>
+
+    <section id="script-preview">
+      <h3>Script preview</h3>
+      <p id="script-meta"></p>
+      <pre id="script-text"></pre>
+    </section>
+
+    <section id="audio-section">
+      <h3>Your audiobook</h3>
+      <p id="audio-meta"></p>
+      <audio id="audio-player" controls></audio>
+      <p><a id="download-link" download>Download MP3</a></p>
+    </section>
+  </main>
+
+  <script>
+    let mode = 'url';
+
+    function setMode(m) {
+      mode = m;
+      document.getElementById('url-section').style.display = m === 'url' ? '' : 'none';
+      document.getElementById('text-section').style.display = m === 'text' ? '' : 'none';
+      document.getElementById('btn-url').className = m === 'url' ? '' : 'secondary';
+      document.getElementById('btn-text').className = m === 'text' ? '' : 'secondary';
+    }
+
+    function getPayload() {
+      const voice = document.getElementById('voice-select').value;
+      if (mode === 'url') {
+        const url = document.getElementById('url-input').value.trim();
+        if (!url) { showError('Please enter a URL.'); return null; }
+        return { url, voice };
+      } else {
+        const text = document.getElementById('text-input').value.trim();
+        const title = document.getElementById('title-input').value.trim() || undefined;
+        if (!text) { showError('Please paste some article text.'); return null; }
+        return { text, title, voice };
+      }
+    }
+
+    function showError(msg) {
+      document.getElementById('error-msg').textContent = msg;
+    }
+
+    function clearError() {
+      document.getElementById('error-msg').textContent = '';
+    }
+
+    function setLoading(on) {
+      document.getElementById('spinner').style.display = on ? '' : 'none';
+      document.getElementById('btn-convert').disabled = on;
+      document.getElementById('btn-preview').disabled = on;
+    }
+
+    async function previewScript() {
+      clearError();
+      const payload = getPayload();
+      if (!payload) return;
+      setLoading(true);
+      try {
+        const res = await fetch('/api/v1/script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        document.getElementById('script-text').textContent = data.script;
+        document.getElementById('script-meta').textContent =
+          `"${data.title}" — ${data.word_count} words`;
+        document.getElementById('script-preview').style.display = '';
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function convertAudio() {
+      clearError();
+      const payload = getPayload();
+      if (!payload) return;
+      setLoading(true);
+      document.getElementById('audio-section').style.display = 'none';
+      try {
+        const res = await fetch('/api/v1/convert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || res.statusText);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const title = res.headers.get('X-Article-Title') || 'audiobook';
+        const words = res.headers.get('X-Script-Word-Count') || '';
+
+        const player = document.getElementById('audio-player');
+        player.src = url;
+        player.load();
+
+        const dl = document.getElementById('download-link');
+        dl.href = url;
+        dl.download = title.replace(/\s+/g, '_') + '.mp3';
+        dl.textContent = `Download "${title}.mp3"`;
+
+        document.getElementById('audio-meta').textContent =
+          words ? `${words} words` : '';
+        document.getElementById('audio-section').style.display = '';
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+  </script>
+</body>
+</html>
