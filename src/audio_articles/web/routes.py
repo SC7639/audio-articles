@@ -14,9 +14,10 @@ from audio_articles.core.exceptions import (
 from audio_articles.core.fetcher import extract_from_text, fetch_and_extract
 from audio_articles.core.models import ArticleInput
 from audio_articles.core.pipeline import run
+from audio_articles.core.qa import ask as qa_ask
 from audio_articles.core.summarizer import summarize
 
-from .schemas import ConvertRequest, ScriptResponse
+from .schemas import ChatRequest, ChatResponse, ConvertRequest, ScriptResponse
 
 router = APIRouter(prefix="/api/v1")
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -110,6 +111,38 @@ async def get_script(req: ConvertRequest):
         source_url=str(req.url) if req.url else None,
         chunks_used=script_result.chunks_used,
     )
+
+
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    summary="Ask a question about an article",
+)
+async def chat_article(req: ChatRequest) -> ChatResponse:
+    """Extract the article then answer a question using Claude.
+
+    The article body is prompt-cached on the Claude side, so repeated questions
+    about the same article are significantly cheaper after the first call.
+    """
+    if not req.url and not req.text:
+        raise HTTPException(status_code=422, detail="Provide 'url' or 'text'.")
+
+    try:
+        if req.url:
+            extraction = await _in_thread(fetch_and_extract, str(req.url))
+        else:
+            extraction = extract_from_text(req.text or "", title=req.title or "Article")
+    except ExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        answer = await _in_thread(qa_ask, req.question, extraction, req.history or [])
+    except SummarizationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except AudioArticlesError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return ChatResponse(answer=answer)
 
 
 @router.post(

@@ -36,3 +36,10 @@ class AudiobookResult(BaseModel):
     format: str = "mp3"
 
     model_config = {"arbitrary_types_allowed": True}
+
+
+class QATurn(BaseModel):
+    """A single question-answer exchange for multi-turn article Q&A."""
+
+    question: str
+    answer: str
