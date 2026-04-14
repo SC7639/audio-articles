@@ -34,13 +34,13 @@ def test_extract_from_file_with_title(tmp_path: Path):
 
 
 def test_fetch_and_extract_http_error(mocker):
-    import httpx
+    from curl_cffi.requests.exceptions import HTTPError
 
-    mock_response = mocker.MagicMock()
-    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "404", request=mocker.MagicMock(), response=mocker.MagicMock(status_code=404)
+    mock_response = mocker.MagicMock(status_code=404)
+    mocker.patch(
+        "audio_articles.core.fetcher.cffi_requests.get",
+        side_effect=HTTPError("404", response=mock_response),
     )
-    mocker.patch("audio_articles.core.fetcher.httpx.get", return_value=mock_response)
 
     with pytest.raises(ExtractionError, match="HTTP 404"):
         fetch_and_extract("https://example.com/article")
@@ -50,7 +50,7 @@ def test_fetch_and_extract_no_content(mocker):
     mock_response = mocker.MagicMock()
     mock_response.raise_for_status.return_value = None
     mock_response.text = "<html><body></body></html>"
-    mocker.patch("audio_articles.core.fetcher.httpx.get", return_value=mock_response)
+    mocker.patch("audio_articles.core.fetcher.cffi_requests.get", return_value=mock_response)
     mocker.patch("audio_articles.core.fetcher.trafilatura.extract", return_value=None)
 
     with pytest.raises(ExtractionError, match="Could not extract"):

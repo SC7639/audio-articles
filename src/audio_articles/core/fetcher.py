@@ -1,18 +1,97 @@
+import json
+import re
 from pathlib import Path
 
-import httpx
 import trafilatura
+from curl_cffi import requests as cffi_requests
 
 from .exceptions import ExtractionError
 from .models import ExtractionResult
 
-_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; audio-articles/1.0)"}
+# Matches: https://foo.substack.com/p/some-slug
+_SUBSTACK_POST_RE = re.compile(
+    r"^(https?://[^/]+\.substack\.com)/p/([^/?#]+)", re.IGNORECASE
+)
 
 
-def fetch_and_extract(url: str, *, timeout: float = 20.0) -> ExtractionResult:
-    """Download the page at `url` and extract main article text via trafilatura."""
-    raw_html = _fetch_html(url, timeout=timeout)
+def load_cookies_file(path: Path) -> dict[str, str]:
+    """Parse a Netscape cookie file and return a name→value dict.
+
+    Netscape format (tab-separated):
+        domain  include_subdomains  path  secure  expires  name  value
+    Lines beginning with '#' are comments.
+    """
+    cookies: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            name, value = parts[5], parts[6]
+            cookies[name] = value
+    return cookies
+
+
+def fetch_and_extract(
+    url: str,
+    *,
+    timeout: float = 20.0,
+    cookies: dict[str, str] | None = None,
+) -> ExtractionResult:
+    """Download the page at `url` and extract main article text via trafilatura.
+
+    Substack post URLs are automatically rewritten to the JSON API endpoint,
+    which bypasses Cloudflare bot protection on the reader page.
+    """
+    m = _SUBSTACK_POST_RE.match(url)
+    if m:
+        return _fetch_substack_api(m.group(1), m.group(2), timeout=timeout, cookies=cookies)
+    raw_html = _fetch_html(url, timeout=timeout, cookies=cookies)
     return _extract_from_html(raw_html, source_url=url)
+
+
+def _fetch_substack_api(
+    base: str,
+    slug: str,
+    *,
+    timeout: float,
+    cookies: dict[str, str] | None,
+) -> ExtractionResult:
+    api_url = f"{base}/api/v1/posts/{slug}"
+    raw = _fetch_html(api_url, timeout=timeout, cookies=cookies)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ExtractionError(f"Unexpected response from Substack API: {exc}") from exc
+
+    title = data.get("title") or slug
+    body_html = data.get("body_html") or ""
+    if not body_html:
+        raise ExtractionError(
+            f"No article body returned by Substack API for '{slug}'. "
+            "The post may require a paid subscription — pass --cookies with your session."
+        )
+
+    body = trafilatura.extract(
+        body_html,
+        include_comments=False,
+        include_tables=False,
+        favor_recall=True,
+        output_format="txt",
+    ) or ""
+    if not body:
+        # Fallback: strip HTML tags manually
+        body = re.sub(r"<[^>]+>", " ", body_html)
+        body = re.sub(r"\s+", " ", body).strip()
+
+    source_url = data.get("canonical_url") or f"{base}/p/{slug}"
+    return ExtractionResult(
+        title=title,
+        body=body,
+        source_url=source_url,
+        word_count=len(body.split()),
+    )
 
 
 def extract_from_text(text: str, title: str = "Article") -> ExtractionResult:
@@ -31,16 +110,22 @@ def extract_from_file(path: Path, title: str | None = None) -> ExtractionResult:
     return extract_from_text(text, title=title or path.stem)
 
 
-def _fetch_html(url: str, *, timeout: float) -> str:
+def _fetch_html(url: str, *, timeout: float, cookies: dict[str, str] | None = None) -> str:
     try:
-        resp = httpx.get(url, headers=_HEADERS, timeout=timeout, follow_redirects=True)
+        resp = cffi_requests.get(
+            url,
+            impersonate="chrome124",
+            cookies=cookies or {},
+            timeout=timeout,
+        )
         resp.raise_for_status()
         return resp.text
-    except httpx.HTTPStatusError as exc:
-        raise ExtractionError(f"HTTP {exc.response.status_code} fetching {url}") from exc
-    except httpx.TimeoutException as exc:
+    except cffi_requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        raise ExtractionError(f"HTTP {status} fetching {url}") from exc
+    except cffi_requests.exceptions.Timeout as exc:
         raise ExtractionError(f"Timed out fetching {url}") from exc
-    except httpx.RequestError as exc:
+    except cffi_requests.exceptions.RequestException as exc:
         raise ExtractionError(f"Network error fetching {url}: {exc}") from exc
 
 
