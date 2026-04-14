@@ -20,6 +20,18 @@
     .actions button { flex: 1; }
     #spinner { display: none; }
     small.hint { color: var(--pico-muted-color); }
+
+    /* Chat styles */
+    #chat-section { display: none; margin-top: 2rem; border-top: 1px solid var(--pico-muted-border-color); padding-top: 1.5rem; }
+    #chat-messages { min-height: 3rem; max-height: 400px; overflow-y: auto; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+    .chat-bubble { padding: 0.65rem 0.9rem; border-radius: 8px; max-width: 90%; line-height: 1.5; }
+    .chat-bubble.user { background: var(--pico-primary-background); color: var(--pico-primary-inverse); align-self: flex-end; }
+    .chat-bubble.assistant { background: var(--pico-code-background-color); align-self: flex-start; }
+    .chat-input-row { display: flex; gap: 0.5rem; }
+    .chat-input-row input { flex: 1; margin: 0; }
+    .chat-input-row button { margin: 0; width: auto; }
+    #chat-error { color: var(--pico-del-color); font-size: 0.875rem; margin-top: 0.4rem; }
+    #chat-spinner { display: none; font-size: 0.875rem; color: var(--pico-muted-color); margin-top: 0.3rem; }
   </style>
 </head>
 <body>
@@ -76,10 +88,25 @@
       <audio id="audio-player" controls></audio>
       <p><a id="download-link" download>Download MP3</a></p>
     </section>
+
+    <!-- Q&A chat — appears after preview or audio generation -->
+    <section id="chat-section">
+      <h3>Ask about this article</h3>
+      <p><small class="hint">Ask follow-up questions about the article. Answers use Claude with prompt caching — each question costs roughly $0.001.</small></p>
+      <div id="chat-messages"></div>
+      <div class="chat-input-row">
+        <input id="chat-input" type="text" placeholder="e.g. What is the main argument?" onkeydown="if(event.key==='Enter')sendChat()" />
+        <button onclick="sendChat()">Ask</button>
+      </div>
+      <p id="chat-error"></p>
+      <p id="chat-spinner" aria-busy="true">Thinking…</p>
+    </section>
   </main>
 
   <script>
     let mode = 'url';
+    let chatHistory = [];   // [{question, answer}, ...]
+    let articleSource = null; // {url?:string, text?:string, title?:string}
 
     function setMode(m) {
       mode = m;
@@ -117,6 +144,13 @@
       document.getElementById('btn-preview').disabled = on;
     }
 
+    function showChat(source) {
+      articleSource = source;
+      chatHistory = [];
+      document.getElementById('chat-messages').innerHTML = '';
+      document.getElementById('chat-section').style.display = '';
+    }
+
     async function previewScript() {
       clearError();
       const payload = getPayload();
@@ -137,6 +171,7 @@
         document.getElementById('script-meta').textContent =
           `"${data.title}" — ${data.word_count} words`;
         document.getElementById('script-preview').style.display = '';
+        showChat({ url: payload.url, text: payload.text, title: payload.title });
       } catch (e) {
         showError(e.message);
       } finally {
@@ -177,10 +212,61 @@
         document.getElementById('audio-meta').textContent =
           words ? `${words} words` : '';
         document.getElementById('audio-section').style.display = '';
+        showChat({ url: payload.url, text: payload.text, title: payload.title });
       } catch (e) {
         showError(e.message);
       } finally {
         setLoading(false);
+      }
+    }
+
+    function appendMessage(role, text) {
+      const container = document.getElementById('chat-messages');
+      const bubble = document.createElement('div');
+      bubble.className = `chat-bubble ${role}`;
+      bubble.textContent = text;
+      container.appendChild(bubble);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    async function sendChat() {
+      const input = document.getElementById('chat-input');
+      const question = input.value.trim();
+      if (!question) return;
+      if (!articleSource) return;
+
+      document.getElementById('chat-error').textContent = '';
+      document.getElementById('chat-spinner').style.display = '';
+      input.value = '';
+      input.disabled = true;
+
+      appendMessage('user', question);
+
+      const body = {
+        ...articleSource,
+        question,
+        history: chatHistory,
+      };
+
+      try {
+        const res = await fetch('/api/v1/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        appendMessage('assistant', data.answer);
+        chatHistory.push({ question, answer: data.answer });
+      } catch (e) {
+        document.getElementById('chat-error').textContent = e.message;
+      } finally {
+        document.getElementById('chat-spinner').style.display = 'none';
+        input.disabled = false;
+        input.focus();
       }
     }
   </script>

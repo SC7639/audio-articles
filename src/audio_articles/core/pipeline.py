@@ -3,9 +3,35 @@ from pathlib import Path
 
 from .config import get_settings
 from .fetcher import extract_from_file, extract_from_text, fetch_and_extract
-from .models import ArticleInput, AudiobookResult
+from .models import ArticleInput, AudiobookResult, ExtractionResult
 from .summarizer import summarize
 from .tts import synthesize
+
+
+def run_full(article_input: ArticleInput) -> tuple[AudiobookResult, ExtractionResult]:
+    """Full pipeline returning both the audiobook result and the extraction.
+
+    Prefer this over run() when you need the article text afterwards (e.g. Q&A).
+    """
+    if article_input.url:
+        extraction = fetch_and_extract(str(article_input.url), cookies=article_input.cookies)
+        if article_input.title:
+            extraction = extraction.model_copy(update={"title": article_input.title})
+    else:
+        text = article_input.text or ""
+        extraction = extract_from_text(text, title=article_input.title or "Article")
+
+    local = article_input.local
+    script_result = summarize(extraction, local=local)
+    audio_bytes = synthesize(script_result, local=local)
+
+    result = AudiobookResult(
+        audio_bytes=audio_bytes,
+        script=script_result.script,
+        title=extraction.title,
+        source_url=str(article_input.url) if article_input.url else None,
+    )
+    return result, extraction
 
 
 def run(article_input: ArticleInput) -> AudiobookResult:
@@ -16,35 +42,29 @@ def run(article_input: ArticleInput) -> AudiobookResult:
     It is deliberately synchronous so the CLI can call it directly without
     an event loop. The web layer runs it in a ThreadPoolExecutor.
     """
-    if article_input.url:
-        extraction = fetch_and_extract(str(article_input.url))
-        if article_input.title:
-            extraction = extraction.model_copy(update={"title": article_input.title})
-    else:
-        text = article_input.text or ""
-        extraction = extract_from_text(text, title=article_input.title or "Article")
+    result, _ = run_full(article_input)
+    return result
 
+
+def run_full_from_file(
+    path: Path, title: str | None = None
+) -> tuple[AudiobookResult, ExtractionResult]:
+    """Convenience wrapper for files, returning both audiobook and extraction."""
+    extraction = extract_from_file(path, title=title)
     script_result = summarize(extraction)
     audio_bytes = synthesize(script_result)
-
-    return AudiobookResult(
+    result = AudiobookResult(
         audio_bytes=audio_bytes,
         script=script_result.script,
         title=extraction.title,
-        source_url=str(article_input.url) if article_input.url else None,
     )
+    return result, extraction
 
 
 def run_from_file(path: Path, title: str | None = None) -> AudiobookResult:
     """Convenience wrapper that reads a file and runs the full pipeline."""
-    extraction = extract_from_file(path, title=title)
-    script_result = summarize(extraction)
-    audio_bytes = synthesize(script_result)
-    return AudiobookResult(
-        audio_bytes=audio_bytes,
-        script=script_result.script,
-        title=extraction.title,
-    )
+    result, _ = run_full_from_file(path, title=title)
+    return result
 
 
 def save_audio(result: AudiobookResult, output_dir: str | None = None) -> Path:

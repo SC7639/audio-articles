@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     chunk_size_chars: int = 8_000
     chunk_overlap_chars: int = 500
 
+    # Local mode (Ollama + edge-tts)
+    ollama_url: str = "http://localhost:11434/v1"
+    ollama_model: str = "llama3.2"
+    edge_tts_voice: str = "en-GB-RyanNeural"
+
     host: str = "0.0.0.0"
     port: int = 8000
     output_dir: str = "./output"

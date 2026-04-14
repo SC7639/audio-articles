@@ -7,6 +7,8 @@ class ArticleInput(BaseModel):
     url: HttpUrl | None = None
     text: str | None = None
     title: str | None = None
+    cookies: dict[str, str] | None = None
+    local: bool = False
 
     @model_validator(mode="after")
     def _require_source(self) -> "ArticleInput":
@@ -36,3 +38,10 @@ class AudiobookResult(BaseModel):
     format: str = "mp3"
 
     model_config = {"arbitrary_types_allowed": True}
+
+
+class QATurn(BaseModel):
+    """A single question-answer exchange for multi-turn article Q&A."""
+
+    question: str
+    answer: str
