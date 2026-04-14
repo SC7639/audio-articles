@@ -1,5 +1,7 @@
+import asyncio
 import re
 
+import edge_tts
 from openai import OpenAI
 
 from .config import get_settings
@@ -10,8 +12,15 @@ from .models import ScriptResult
 _WORD_LIMIT = 2800
 
 
-def synthesize(script_result: ScriptResult) -> bytes:
-    """Convert a ScriptResult to MP3 audio bytes using OpenAI tts-1-hd."""
+def synthesize(script_result: ScriptResult, *, local: bool = False) -> bytes:
+    """Convert a ScriptResult to MP3 audio bytes.
+
+    When local=True, uses edge-tts (free, no API key required).
+    When local=False, uses OpenAI tts-1-hd.
+    """
+    if local:
+        return _synthesize_edge(script_result.script)
+
     settings = get_settings()
     client = OpenAI(api_key=settings.openai_api_key)
     script = script_result.script
@@ -20,10 +29,28 @@ def synthesize(script_result: ScriptResult) -> bytes:
     if len(words) <= _WORD_LIMIT:
         return _single_tts(client, script, settings)
 
-    # Long script: split at sentence boundaries and concatenate raw MP3 frames
     segments = _split_at_sentences(script, _WORD_LIMIT)
     parts = [_single_tts(client, seg, settings) for seg in segments]
     return b"".join(parts)
+
+
+def _synthesize_edge(text: str) -> bytes:
+    """Synthesize speech using edge-tts (Microsoft neural voices, free)."""
+    settings = get_settings()
+    voice = settings.edge_tts_voice
+
+    async def _run() -> bytes:
+        communicate = edge_tts.Communicate(text, voice)
+        chunks: list[bytes] = []
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                chunks.append(chunk["data"])
+        return b"".join(chunks)
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        raise TTSError(f"edge-tts failed: {exc}") from exc
 
 
 def _single_tts(client: OpenAI, text: str, settings) -> bytes:

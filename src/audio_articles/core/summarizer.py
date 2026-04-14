@@ -1,6 +1,7 @@
 import re
 
 from anthropic import Anthropic
+from openai import APIConnectionError, OpenAI
 
 from .config import get_settings
 from .exceptions import SummarizationError
@@ -45,18 +46,34 @@ Follow the output rules in your system prompt.
 # ---------------------------------------------------------------------------
 
 
-def summarize(extraction: ExtractionResult) -> ScriptResult:
-    """Convert an ExtractionResult into a ScriptResult using the Claude API."""
-    settings = get_settings()
-    client = Anthropic(api_key=settings.anthropic_api_key)
+def summarize(extraction: ExtractionResult, *, local: bool = False) -> ScriptResult:
+    """Convert an ExtractionResult into a ScriptResult.
 
+    When local=True, uses Ollama (llama3.2 by default) via OpenAI-compatible API.
+    When local=False, uses the Anthropic Claude API.
+    """
+    settings = get_settings()
     body = extraction.body
+
+    if local:
+        client = _ollama_client(settings)
+        if len(body) <= settings.chunk_threshold_chars:
+            script = _single_call_llm(client, body, extraction.title, settings)
+        else:
+            chunks = _split_chunks(body, settings.chunk_size_chars, settings.chunk_overlap_chars)
+            summaries = [_chunk_summary_llm(client, chunk, settings) for chunk in chunks]
+            combined = "\n\n---\n\n".join(
+                f"Section {i + 1}:\n{s}" for i, s in enumerate(summaries)
+            )
+            script = _reduce_call_llm(client, combined, extraction.title, settings)
+        return ScriptResult(script=script, word_count=len(script.split()), chunks_used=1)
+
+    client = Anthropic(api_key=settings.anthropic_api_key)
 
     if len(body) <= settings.chunk_threshold_chars:
         script = _single_call(client, body, extraction.title, settings)
         return ScriptResult(script=script, word_count=len(script.split()), chunks_used=1)
 
-    # Long article: map → reduce
     chunks = _split_chunks(body, settings.chunk_size_chars, settings.chunk_overlap_chars)
     summaries = [_chunk_summary(client, chunk, settings) for chunk in chunks]
     combined = "\n\n---\n\n".join(
@@ -71,7 +88,66 @@ def summarize(extraction: ExtractionResult) -> ScriptResult:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Ollama (local) helpers
+# ---------------------------------------------------------------------------
+
+
+def _ollama_client(settings) -> OpenAI:
+    return OpenAI(base_url=settings.ollama_url, api_key="ollama")
+
+
+def _call_llm(
+    client: OpenAI,
+    system: str,
+    user_msg: str,
+    settings,
+    max_tokens: int | None = None,
+) -> str:
+    try:
+        response = client.chat.completions.create(
+            model=settings.ollama_model,
+            max_tokens=max_tokens or settings.summarizer_max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+    except APIConnectionError as exc:
+        raise SummarizationError(
+            f"Ollama not reachable at {settings.ollama_url} — is it running? Try: ollama serve"
+        ) from exc
+    except Exception as exc:
+        raise SummarizationError(f"Ollama call failed: {exc}") from exc
+
+    content = response.choices[0].message.content
+    if not content:
+        raise SummarizationError("Ollama returned an empty response.")
+    return content.strip()
+
+
+def _single_call_llm(client: OpenAI, body: str, title: str, settings) -> str:
+    system = _SYSTEM_PROMPT.format(word_target=settings.script_word_target)
+    user_msg = f'Article title: "{title}"\n\nArticle text:\n{body}'
+    return _call_llm(client, system, user_msg, settings)
+
+
+def _chunk_summary_llm(client: OpenAI, chunk: str, settings) -> str:
+    user_msg = _CHUNK_SUMMARY_USER.format(chunk=chunk)
+    return _call_llm(client, _CHUNK_SUMMARY_SYSTEM, user_msg, settings, max_tokens=512)
+
+
+def _reduce_call_llm(client: OpenAI, summaries: str, title: str, settings) -> str:
+    system = _SYSTEM_PROMPT.format(word_target=settings.script_word_target)
+    user_msg = _REDUCE_USER.format(
+        title=title,
+        word_target=settings.script_word_target,
+        summaries=summaries,
+    )
+    return _call_llm(client, system, user_msg, settings)
+
+
+# ---------------------------------------------------------------------------
+# Claude (cloud) helpers
 # ---------------------------------------------------------------------------
 
 
@@ -119,6 +195,11 @@ def _call_claude(
     return response.content[0].text.strip()
 
 
+# ---------------------------------------------------------------------------
+# Shared chunking
+# ---------------------------------------------------------------------------
+
+
 def _split_chunks(text: str, size: int, overlap: int) -> list[str]:
     """Split text into overlapping character-level chunks, breaking on whitespace."""
     chunks: list[str] = []
@@ -126,7 +207,6 @@ def _split_chunks(text: str, size: int, overlap: int) -> list[str]:
     while start < len(text):
         end = min(start + size, len(text))
         if end < len(text):
-            # Extend to the next whitespace so we don't cut mid-word
             ws = text.find(" ", end)
             if ws != -1 and ws - end < 200:
                 end = ws

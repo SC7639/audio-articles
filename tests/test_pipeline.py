@@ -60,6 +60,16 @@ def test_save_audio_creates_file(tmp_path, sample_extraction, sample_script):
     assert saved.read_bytes() == b"fake-mp3"
 
 
+def test_article_input_local_defaults_false():
+    inp = ArticleInput(text="Some text.")
+    assert inp.local is False
+
+
+def test_article_input_local_can_be_set():
+    inp = ArticleInput(text="Some text.", local=True)
+    assert inp.local is True
+
+
 def test_save_audio_sanitizes_title(tmp_path, sample_script):
     result = AudiobookResult(
         audio_bytes=b"data",

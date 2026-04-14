@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from audio_articles.core.exceptions import AudioArticlesError
+from audio_articles.core.fetcher import load_cookies_file
 from audio_articles.core.models import ArticleInput, QATurn
 from audio_articles.core.pipeline import run, run_full, run_full_from_file, save_audio
 
@@ -39,6 +40,8 @@ def convert(
     script_only: Annotated[bool, typer.Option("--script-only", help="Print the script without generating audio.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", help="Print the script after conversion.")] = False,
     interactive: Annotated[bool, typer.Option("--interactive", "-i", help="After converting, enter interactive Q&A mode.")] = False,
+    cookies: Annotated[Path | None, typer.Option("--cookies", "-c", help="Netscape cookie file (export from browser) for authenticated fetching.")] = None,
+    local: Annotated[bool, typer.Option("--local", "-l", help="Use Ollama + edge-tts (free, no API keys required).")] = False,
 ) -> None:
     """
     Convert an article (URL, file, or inline text) to an MP3 audiobook.
@@ -83,7 +86,8 @@ def convert(
                     result = run_from_file(file, title=title)
             else:
                 progress.add_task("Fetching article, summarizing, and synthesizing audio…")
-                article_input = ArticleInput(url=url, text=text, title=title)
+                loaded_cookies = load_cookies_file(cookies) if cookies else None
+                article_input = ArticleInput(url=url, text=text, title=title, cookies=loaded_cookies, local=local)
                 if interactive or script_only:
                     result, extraction = run_full(article_input)
                 else:
@@ -125,6 +129,7 @@ def ask(
     file: Annotated[Path | None, typer.Option("--file", "-f", help="Path to a plain-text file.")] = None,
     text: Annotated[str | None, typer.Option("--text", "-t", help="Raw article text (inline).")] = None,
     title: Annotated[str | None, typer.Option("--title", help="Override the article title.")] = None,
+    cookies: Annotated[Path | None, typer.Option("--cookies", "-c", help="Netscape cookie file for authenticated fetching.")] = None,
 ) -> None:
     """
     Ask a one-off question about an article.
@@ -155,7 +160,8 @@ def ask(
                     raise typer.Exit(1)
                 extraction = extract_from_file(file, title=title)
             elif url:
-                extraction = fetch_and_extract(url)
+                loaded_cookies = load_cookies_file(cookies) if cookies else None
+                extraction = fetch_and_extract(url, cookies=loaded_cookies)
                 if title:
                     extraction = extraction.model_copy(update={"title": title})
             else:

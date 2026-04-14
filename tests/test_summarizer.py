@@ -58,6 +58,35 @@ def test_summarize_calls_claude(sample_extraction, mocker):
     mock_instance.messages.create.assert_called_once()
 
 
+def test_summarize_local_calls_ollama(sample_extraction, mocker):
+    """summarize(local=True) should use the Ollama path, not Anthropic."""
+    mock_anthropic = mocker.patch("audio_articles.core.summarizer.Anthropic")
+    mock_openai_cls = mocker.patch("audio_articles.core.summarizer.OpenAI")
+    mock_client = mock_openai_cls.return_value
+    mock_client.chat.completions.create.return_value = mocker.MagicMock(
+        choices=[mocker.MagicMock(message=mocker.MagicMock(content="Local script text."))]
+    )
+
+    mocker.patch(
+        "audio_articles.core.summarizer.get_settings",
+        return_value=mocker.MagicMock(
+            ollama_url="http://localhost:11434/v1",
+            ollama_model="llama3.2",
+            summarizer_max_tokens=2048,
+            script_word_target=400,
+            chunk_threshold_chars=12000,
+            chunk_size_chars=8000,
+            chunk_overlap_chars=500,
+        ),
+    )
+
+    result = summarize(sample_extraction, local=True)
+
+    assert result.script == "Local script text."
+    mock_client.chat.completions.create.assert_called_once()
+    mock_anthropic.assert_not_called()
+
+
 def test_summarize_raises_on_api_error(sample_extraction, mocker):
     mock_create = mocker.patch("audio_articles.core.summarizer.Anthropic")
     mock_instance = mock_create.return_value

@@ -14,15 +14,16 @@ def run_full(article_input: ArticleInput) -> tuple[AudiobookResult, ExtractionRe
     Prefer this over run() when you need the article text afterwards (e.g. Q&A).
     """
     if article_input.url:
-        extraction = fetch_and_extract(str(article_input.url))
+        extraction = fetch_and_extract(str(article_input.url), cookies=article_input.cookies)
         if article_input.title:
             extraction = extraction.model_copy(update={"title": article_input.title})
     else:
         text = article_input.text or ""
         extraction = extract_from_text(text, title=article_input.title or "Article")
 
-    script_result = summarize(extraction)
-    audio_bytes = synthesize(script_result)
+    local = article_input.local
+    script_result = summarize(extraction, local=local)
+    audio_bytes = synthesize(script_result, local=local)
 
     result = AudiobookResult(
         audio_bytes=audio_bytes,
