@@ -1,10 +1,15 @@
 import asyncio
 import io
+import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from audio_articles.core.config import get_settings
 from audio_articles.core.exceptions import (
     AudioArticlesError,
     ExtractionError,
@@ -17,7 +22,7 @@ from audio_articles.core.pipeline import run
 from audio_articles.core.qa import ask as qa_ask
 from audio_articles.core.summarizer import summarize
 
-from .schemas import ChatRequest, ChatResponse, ConvertRequest, ScriptResponse
+from .schemas import ChatRequest, ChatResponse, ConvertRequest, FileInfo, ScriptResponse
 
 router = APIRouter(prefix="/api/v1")
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -46,6 +51,24 @@ async def list_voices():
     return {"voices": _VOICES}
 
 
+@router.get("/files", response_model=list[FileInfo], summary="List saved MP3 files")
+async def list_files():
+    """Return all MP3s in the output directory, newest first."""
+    output_dir = Path(get_settings().output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for f in sorted(output_dir.glob("*.mp3"), key=lambda p: p.stat().st_ctime, reverse=True):
+        stat = f.stat()
+        files.append(FileInfo(
+            name=f.stem,
+            filename=f.name,
+            size_bytes=stat.st_size,
+            created_at=datetime.fromtimestamp(stat.st_ctime).isoformat(),
+            url=f"/output/{quote(f.name)}",
+        ))
+    return files
+
+
 @router.post(
     "/convert",
     response_class=StreamingResponse,
@@ -71,6 +94,12 @@ async def convert_article(req: ConvertRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
     safe_title = result.title.replace(" ", "_")[:50]
+
+    output_dir = Path(get_settings().output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fs_title = re.sub(r'[^\w\s-]', '', result.title).strip()[:50] or "audio"
+    (output_dir / f"{fs_title}.mp3").write_bytes(result.audio_bytes)
+
     return StreamingResponse(
         io.BytesIO(result.audio_bytes),
         media_type="audio/mpeg",
