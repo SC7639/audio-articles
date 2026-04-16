@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -19,6 +20,8 @@ from audio_articles.core.exceptions import (
 from audio_articles.core.fetcher import extract_from_text, fetch_and_extract
 from audio_articles.core.models import ArticleInput
 from audio_articles.core.pipeline import run
+from audio_articles.core.summarizer import summarize
+from audio_articles.core.tts import synthesize
 from audio_articles.core.qa import ask as qa_ask
 from audio_articles.core.summarizer import summarize
 
@@ -82,7 +85,7 @@ async def convert_article(req: ConvertRequest):
     if req.voice:
         _apply_voice(req.voice)
 
-    article_input = ArticleInput(url=req.url, text=req.text, title=req.title)
+    article_input = ArticleInput(url=req.url, text=req.text, title=req.title, local=req.local)
 
     try:
         result = await _in_thread(run, article_input)
@@ -109,6 +112,67 @@ async def convert_article(req: ConvertRequest):
             "X-Article-Title": result.title,
         },
     )
+
+
+@router.post(
+    "/convert/stream",
+    response_class=StreamingResponse,
+    summary="Convert article to MP3 with step-by-step progress (SSE)",
+)
+async def convert_stream(req: ConvertRequest):
+    """Streams Server-Sent Events: one per pipeline step, then a final 'done' event
+    containing the URL of the saved MP3."""
+
+    def _sse(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    async def generate():
+        try:
+            if req.voice and not req.local:
+                _apply_voice(req.voice)
+
+            # Step 1 — fetch / extract
+            if req.url:
+                yield _sse({"status": "Fetching article\u2026", "step": 1, "total": 3})
+                extraction = await _in_thread(fetch_and_extract, str(req.url))
+                if req.title:
+                    extraction = extraction.model_copy(update={"title": req.title})
+            else:
+                yield _sse({"status": "Extracting text\u2026", "step": 1, "total": 3})
+                extraction = extract_from_text(req.text or "", title=req.title or "Article")
+
+            # Step 2 — summarize
+            summarizer_label = "Summarising with Ollama\u2026" if req.local else "Summarising with Claude\u2026"
+            yield _sse({"status": summarizer_label, "step": 2, "total": 3})
+            script_result = await _in_thread(lambda: summarize(extraction, local=req.local))
+
+            # Step 3 — TTS
+            tts_label = "Synthesising with edge-tts\u2026" if req.local else "Synthesising audio\u2026"
+            yield _sse({"status": tts_label, "step": 3, "total": 3})
+            audio_bytes = await _in_thread(lambda: synthesize(script_result, local=req.local))
+
+            # Save to disk
+            output_dir = Path(get_settings().output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            fs_title = re.sub(r"[^\w\s-]", "", extraction.title).strip()[:50] or "audio"
+            output_path = output_dir / f"{fs_title}.mp3"
+            output_path.write_bytes(audio_bytes)
+
+            yield _sse({
+                "status": "done",
+                "url": f"/output/{quote(output_path.name)}",
+                "title": extraction.title,
+                "words": script_result.word_count,
+            })
+
+        except ExtractionError as exc:
+            yield _sse({"status": "error", "message": str(exc)})
+        except (SummarizationError, TTSError) as exc:
+            yield _sse({"status": "error", "message": str(exc)})
+        except AudioArticlesError as exc:
+            yield _sse({"status": "error", "message": str(exc)})
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.post(

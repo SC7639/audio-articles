@@ -21,6 +21,21 @@
     #spinner { display: none; }
     small.hint { color: var(--pico-muted-color); }
 
+    /* Progress spinner */
+    #progress-section { display: none; margin-top: 1.5rem; text-align: center; }
+    .progress-wheel {
+      width: 2.25rem; height: 2.25rem;
+      border: 3px solid var(--pico-muted-border-color);
+      border-top-color: var(--pico-primary);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+      margin: 0 auto 0.75rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #progress-step { font-weight: 600; margin-bottom: 0.2rem; }
+    #progress-count { font-size: 0.8rem; color: var(--pico-muted-color); }
+    #local-note { font-size: 0.8rem; color: var(--pico-muted-color); margin-top: -0.5rem; margin-bottom: 1rem; }
+
     /* Chat styles */
     #chat-section { display: none; margin-top: 2rem; border-top: 1px solid var(--pico-muted-border-color); padding-top: 1.5rem; }
     #chat-messages { min-height: 3rem; max-height: 400px; overflow-y: auto; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
@@ -61,15 +76,24 @@
       <input id="title-input" type="text" placeholder="Article title" />
     </div>
 
-    <label for="voice-select">Voice</label>
-    <select id="voice-select">
-      <option value="onyx">Onyx (deep, male)</option>
-      <option value="alloy">Alloy (neutral)</option>
-      <option value="echo">Echo (male)</option>
-      <option value="fable">Fable (expressive, male)</option>
-      <option value="nova">Nova (female)</option>
-      <option value="shimmer">Shimmer (female)</option>
-    </select>
+    <div id="voice-row">
+      <label for="voice-select">Voice</label>
+      <select id="voice-select">
+        <option value="onyx">Onyx (deep, male)</option>
+        <option value="alloy">Alloy (neutral)</option>
+        <option value="echo">Echo (male)</option>
+        <option value="fable">Fable (expressive, male)</option>
+        <option value="nova">Nova (female)</option>
+        <option value="shimmer">Shimmer (female)</option>
+      </select>
+    </div>
+
+    <label for="local-toggle">
+      <input type="checkbox" id="local-toggle" role="switch" onchange="toggleLocal(this.checked)" />
+      Local mode
+    </label>
+    <p id="local-hint" class="hint" style="font-size:0.8rem; margin-top:0.25rem; margin-bottom:1rem;">Uses Ollama + edge-tts &mdash; no API keys required</p>
+    <p id="local-note" style="display:none; font-size:0.8rem; color:var(--pico-muted-color);">Voice is configured via <code>EDGE_TTS_VOICE</code> in <code>.env</code></p>
 
     <div class="actions">
       <button id="btn-preview" onclick="previewScript()" class="secondary">Preview script</button>
@@ -77,6 +101,12 @@
     </div>
 
     <div id="spinner" aria-busy="true">Working…</div>
+
+    <div id="progress-section">
+      <div class="progress-wheel"></div>
+      <p id="progress-step"></p>
+      <p id="progress-count"></p>
+    </div>
     <p id="error-msg" class="error"></p>
 
     <section id="script-preview">
@@ -111,6 +141,11 @@
     let chatHistory = [];   // [{question, answer}, ...]
     let articleSource = null; // {url?:string, text?:string, title?:string}
 
+    function toggleLocal(on) {
+      document.getElementById('voice-row').style.display = on ? 'none' : '';
+      document.getElementById('local-note').style.display = on ? '' : 'none';
+    }
+
     function setMode(m) {
       mode = m;
       document.getElementById('url-section').style.display = m === 'url' ? '' : 'none';
@@ -120,16 +155,17 @@
     }
 
     function getPayload() {
-      const voice = document.getElementById('voice-select').value;
+      const local = document.getElementById('local-toggle').checked;
+      const voice = local ? undefined : document.getElementById('voice-select').value;
       if (mode === 'url') {
         const url = document.getElementById('url-input').value.trim();
         if (!url) { showError('Please enter a URL.'); return null; }
-        return { url, voice };
+        return { url, voice, local };
       } else {
         const text = document.getElementById('text-input').value.trim();
         const title = document.getElementById('title-input').value.trim() || undefined;
         if (!text) { showError('Please paste some article text.'); return null; }
-        return { text, title, voice };
+        return { text, title, voice, local };
       }
     }
 
@@ -186,10 +222,16 @@
       clearError();
       const payload = getPayload();
       if (!payload) return;
-      setLoading(true);
+
+      document.getElementById('btn-convert').disabled = true;
+      document.getElementById('btn-preview').disabled = true;
       document.getElementById('audio-section').style.display = 'none';
+      document.getElementById('progress-section').style.display = 'block';
+      document.getElementById('progress-step').textContent = 'Starting\u2026';
+      document.getElementById('progress-count').textContent = '';
+
       try {
-        const res = await fetch('/api/v1/convert', {
+        const res = await fetch('/api/v1/convert/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -198,28 +240,48 @@
           const err = await res.json();
           throw new Error(err.detail || res.statusText);
         }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const title = res.headers.get('X-Article-Title') || 'audiobook';
-        const words = res.headers.get('X-Script-Word-Count') || '';
 
-        const player = document.getElementById('audio-player');
-        player.src = url;
-        player.load();
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        const dl = document.getElementById('download-link');
-        dl.href = url;
-        dl.download = title.replace(/\s+/g, '_') + '.mp3';
-        dl.textContent = `Download "${title}.mp3"`;
-
-        document.getElementById('audio-meta').textContent =
-          words ? `${words} words` : '';
-        document.getElementById('audio-section').style.display = '';
-        showChat({ url: payload.url, text: payload.text, title: payload.title });
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split('\n\n');
+          buffer = chunks.pop();
+          for (const chunk of chunks) {
+            for (const line of chunk.split('\n')) {
+              if (!line.startsWith('data: ')) continue;
+              const event = JSON.parse(line.slice(6));
+              if (event.status === 'error') throw new Error(event.message);
+              if (event.status === 'done') {
+                const player = document.getElementById('audio-player');
+                player.src = event.url;
+                player.load();
+                const dl = document.getElementById('download-link');
+                dl.href = event.url;
+                dl.download = event.title.replace(/\s+/g, '_') + '.mp3';
+                dl.textContent = `Download "${event.title}.mp3"`;
+                document.getElementById('audio-meta').textContent =
+                  event.words ? `${event.words} words` : '';
+                document.getElementById('audio-section').style.display = '';
+                showChat({ url: payload.url, text: payload.text, title: payload.title });
+              } else {
+                document.getElementById('progress-step').textContent = event.status;
+                document.getElementById('progress-count').textContent =
+                  `Step ${event.step} of ${event.total}`;
+              }
+            }
+          }
+        }
       } catch (e) {
         showError(e.message);
       } finally {
-        setLoading(false);
+        document.getElementById('progress-section').style.display = 'none';
+        document.getElementById('btn-convert').disabled = false;
+        document.getElementById('btn-preview').disabled = false;
       }
     }
 
