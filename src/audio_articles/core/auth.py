@@ -1,7 +1,7 @@
 import json
-import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .exceptions import LoginError
 
@@ -60,24 +60,15 @@ MEDIUM_CUSTOM_DOMAINS: frozenset[str] = frozenset({
     "blog.devgenius.io",
 })
 
-# ── Regex patterns ────────────────────────────────────────────────────────
-
-_SUBSTACK_DOMAIN_RE = re.compile(
-    r"^https?://[^/]+\.substack\.com", re.IGNORECASE
-)
-_MEDIUM_DOMAIN_RE = re.compile(
-    r"^https?://(?:[^/]+\.)?medium\.com", re.IGNORECASE
-)
-
-
 def _platform_for_url(url: str) -> str | None:
     """Return 'substack', 'medium', or None based on the URL domain."""
-    if _SUBSTACK_DOMAIN_RE.match(url):
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return None
+    if host == "substack.com" or host.endswith(".substack.com"):
         return "substack"
-    if _MEDIUM_DOMAIN_RE.match(url):
+    if host == "medium.com" or host.endswith(".medium.com"):
         return "medium"
-    from urllib.parse import urlparse
-    host = urlparse(url).hostname or ""
     if host in MEDIUM_CUSTOM_DOMAINS:
         return "medium"
     return None

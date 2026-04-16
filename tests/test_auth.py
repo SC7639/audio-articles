@@ -115,6 +115,24 @@ def test_cookies_missing_name_or_value_are_excluded(session_dir: Path):
     assert result == {"good": "val"}
 
 
+def test_lookalike_substack_domain_returns_none(session_dir: Path):
+    SessionStore(session_dir=session_dir).save(
+        "substack", [{"name": "sid", "value": "tok", "domain": ".substack.com"}]
+    )
+    assert get_cookies_for_url(
+        "https://foo.substack.com.attacker.example/p/x", session_dir=session_dir
+    ) is None
+
+
+def test_lookalike_medium_domain_returns_none(session_dir: Path):
+    SessionStore(session_dir=session_dir).save(
+        "medium", [{"name": "uid", "value": "tok", "domain": ".medium.com"}]
+    )
+    assert get_cookies_for_url(
+        "https://medium.com.attacker.example/article", session_dir=session_dir
+    ) is None
+
+
 # ── get_medium_cookies ────────────────────────────────────────────────────
 
 def test_get_medium_cookies_returns_dict(session_dir: Path):
