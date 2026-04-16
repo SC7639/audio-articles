@@ -115,21 +115,19 @@ _PLATFORM_LOGIN_URLS: dict[str, str] = {
 }
 
 
-def _is_logged_in_substack(url: str) -> bool:
-    return "substack.com/feed" in url or "substack.com/inbox" in url
-
-
-def _is_logged_in_medium(url: str) -> bool:
-    # Medium redirects to /me/... or the homepage root after successful login
-    return "medium.com" in url and (
-        "/me/" in url or url.rstrip("/").endswith("medium.com")
-    )
-
-
-_IS_LOGGED_IN: dict[str, object] = {
-    "substack": _is_logged_in_substack,
-    "medium": _is_logged_in_medium,
+# Session cookies that indicate a successful login per platform
+_SESSION_COOKIE: dict[str, str] = {
+    "substack": "substack.sid",
+    "medium": "uid",
 }
+
+
+def _has_session_cookie(context, platform: str) -> bool:
+    """Return True if the browser context has the expected session cookie for platform."""
+    expected = _SESSION_COOKIE.get(platform)
+    if expected is None:
+        return False
+    return any(c["name"] == expected for c in context.cookies())
 
 
 # ── Interactive login ─────────────────────────────────────────────────────
@@ -167,7 +165,6 @@ def login_interactive(
         )
 
     login_url = _PLATFORM_LOGIN_URLS[platform]
-    is_logged_in = _IS_LOGGED_IN[platform]
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -177,7 +174,7 @@ def login_interactive(
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if is_logged_in(page.url):
+            if _has_session_cookie(context, platform):
                 break
             time.sleep(1)
         else:

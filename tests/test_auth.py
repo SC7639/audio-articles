@@ -178,9 +178,10 @@ def test_login_raises_when_playwright_not_installed(mocker, session_dir: Path):
 
 def test_login_raises_on_timeout(mocker, session_dir: Path):
     mock_page = mocker.MagicMock()
-    mock_page.url = "https://substack.com/sign-in"  # never changes
     mock_context = mocker.MagicMock()
     mock_context.new_page.return_value = mock_page
+    # cookies() never returns substack.sid — session never established
+    mock_context.cookies.return_value = []
     mock_browser = mocker.MagicMock()
     mock_browser.new_context.return_value = mock_context
     mock_playwright_ctx = mocker.MagicMock()
@@ -198,10 +199,9 @@ def test_login_raises_on_timeout(mocker, session_dir: Path):
 def test_login_saves_cookies_on_success(mocker, session_dir: Path):
     saved_cookies = [{"name": "substack.sid", "value": "tok", "domain": ".substack.com"}]
     mock_page = mocker.MagicMock()
-    # Simulate URL changing to feed after first sleep
-    mock_page.url = "https://substack.com/feed"
     mock_context = mocker.MagicMock()
     mock_context.new_page.return_value = mock_page
+    # cookies() returns the session cookie — login detected immediately
     mock_context.cookies.return_value = saved_cookies
     mock_browser = mocker.MagicMock()
     mock_browser.new_context.return_value = mock_context
