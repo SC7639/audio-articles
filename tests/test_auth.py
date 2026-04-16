@@ -54,3 +54,83 @@ def test_delete_all_removes_all_json_files(store: SessionStore, session_dir: Pat
 def test_delete_all_noop_when_dir_missing(session_dir: Path):
     store = SessionStore(session_dir=session_dir / "nonexistent")
     store.delete_all()  # should not raise
+
+
+from audio_articles.core.auth import MEDIUM_CUSTOM_DOMAINS, get_cookies_for_url, get_medium_cookies
+
+
+# ── get_cookies_for_url ───────────────────────────────────────────────────
+
+def test_substack_url_returns_substack_cookies(session_dir: Path):
+    store = SessionStore(session_dir=session_dir)
+    cookies = [{"name": "substack.sid", "value": "tok", "domain": ".substack.com"}]
+    store.save("substack", cookies)
+    result = get_cookies_for_url("https://foo.substack.com/p/article", session_dir=session_dir)
+    assert result == {"substack.sid": "tok"}
+
+
+def test_medium_url_returns_medium_cookies(session_dir: Path):
+    store = SessionStore(session_dir=session_dir)
+    cookies = [{"name": "uid", "value": "123", "domain": ".medium.com"}]
+    store.save("medium", cookies)
+    result = get_cookies_for_url("https://medium.com/@user/article", session_dir=session_dir)
+    assert result == {"uid": "123"}
+
+
+def test_medium_subdomain_returns_medium_cookies(session_dir: Path):
+    store = SessionStore(session_dir=session_dir)
+    cookies = [{"name": "uid", "value": "456", "domain": ".medium.com"}]
+    store.save("medium", cookies)
+    result = get_cookies_for_url("https://pub.medium.com/some-article", session_dir=session_dir)
+    assert result == {"uid": "456"}
+
+
+def test_custom_medium_domain_returns_medium_cookies(session_dir: Path):
+    store = SessionStore(session_dir=session_dir)
+    cookies = [{"name": "uid", "value": "789", "domain": ".medium.com"}]
+    store.save("medium", cookies)
+    result = get_cookies_for_url("https://towardsdatascience.com/article", session_dir=session_dir)
+    assert result == {"uid": "789"}
+
+
+def test_unknown_url_returns_none(session_dir: Path):
+    result = get_cookies_for_url("https://example.com/article", session_dir=session_dir)
+    assert result is None
+
+
+def test_returns_none_when_no_session_saved(session_dir: Path):
+    result = get_cookies_for_url("https://foo.substack.com/p/article", session_dir=session_dir)
+    assert result is None
+
+
+def test_cookies_missing_name_or_value_are_excluded(session_dir: Path):
+    store = SessionStore(session_dir=session_dir)
+    cookies = [
+        {"name": "good", "value": "val", "domain": ".substack.com"},
+        {"domain": ".substack.com"},  # missing name + value
+        {"name": "novalue", "domain": ".substack.com"},  # missing value
+    ]
+    store.save("substack", cookies)
+    result = get_cookies_for_url("https://foo.substack.com/p/x", session_dir=session_dir)
+    assert result == {"good": "val"}
+
+
+# ── get_medium_cookies ────────────────────────────────────────────────────
+
+def test_get_medium_cookies_returns_dict(session_dir: Path):
+    store = SessionStore(session_dir=session_dir)
+    store.save("medium", [{"name": "uid", "value": "abc", "domain": ".medium.com"}])
+    result = get_medium_cookies(session_dir=session_dir)
+    assert result == {"uid": "abc"}
+
+
+def test_get_medium_cookies_returns_none_when_no_session(session_dir: Path):
+    assert get_medium_cookies(session_dir=session_dir) is None
+
+
+# ── MEDIUM_CUSTOM_DOMAINS ─────────────────────────────────────────────────
+
+def test_medium_custom_domains_is_frozenset():
+    assert isinstance(MEDIUM_CUSTOM_DOMAINS, frozenset)
+    assert "towardsdatascience.com" in MEDIUM_CUSTOM_DOMAINS
+    assert "betterprogramming.pub" in MEDIUM_CUSTOM_DOMAINS
