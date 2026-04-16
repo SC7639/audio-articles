@@ -33,6 +33,12 @@ def load_cookies_file(path: Path) -> dict[str, str]:
     return cookies
 
 
+def _get_saved_cookies(url: str) -> dict[str, str] | None:
+    """Load saved session cookies for the given URL's platform, if any."""
+    from .auth import get_cookies_for_url
+    return get_cookies_for_url(url)
+
+
 def fetch_and_extract(
     url: str,
     *,
@@ -43,11 +49,18 @@ def fetch_and_extract(
 
     Substack post URLs are automatically rewritten to the JSON API endpoint,
     which bypasses Cloudflare bot protection on the reader page.
+
+    If no `cookies` are provided, saved login sessions are loaded automatically
+    for Substack and Medium URLs.
     """
+    _cookies = cookies
+    if _cookies is None:
+        _cookies = _get_saved_cookies(url)
+
     m = _SUBSTACK_POST_RE.match(url)
     if m:
-        return _fetch_substack_api(m.group(1), m.group(2), timeout=timeout, cookies=cookies)
-    raw_html = _fetch_html(url, timeout=timeout, cookies=cookies)
+        return _fetch_substack_api(m.group(1), m.group(2), timeout=timeout, cookies=_cookies)
+    raw_html = _fetch_html(url, timeout=timeout, cookies=_cookies)
     return _extract_from_html(raw_html, source_url=url)
 
 

@@ -55,3 +55,63 @@ def test_fetch_and_extract_no_content(mocker):
 
     with pytest.raises(ExtractionError, match="Could not extract"):
         fetch_and_extract("https://example.com/empty")
+
+
+def test_fetch_auto_loads_cookies_when_none_given(mocker):
+    """fetch_and_extract calls _get_saved_cookies when no cookies arg is passed."""
+    mocker.patch(
+        "audio_articles.core.fetcher._get_saved_cookies",
+        return_value=None,
+    )
+    mock_resp = mocker.MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.text = "<html><body></body></html>"
+    mocker.patch("audio_articles.core.fetcher.cffi_requests.get", return_value=mock_resp)
+    mocker.patch("audio_articles.core.fetcher.trafilatura.extract", return_value="Body text.")
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract_metadata",
+        return_value=mocker.MagicMock(title="Test"),
+    )
+
+    fetch_and_extract("https://example.com/article")
+
+    import audio_articles.core.fetcher as fetcher_module
+    fetcher_module._get_saved_cookies.assert_called_once_with("https://example.com/article")
+
+
+def test_fetch_does_not_call_auto_load_when_cookies_given(mocker):
+    """Explicit cookies skip the auto-load path entirely."""
+    mock_auto = mocker.patch("audio_articles.core.fetcher._get_saved_cookies")
+    mock_resp = mocker.MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.text = "<html><body></body></html>"
+    mocker.patch("audio_articles.core.fetcher.cffi_requests.get", return_value=mock_resp)
+    mocker.patch("audio_articles.core.fetcher.trafilatura.extract", return_value="Body.")
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract_metadata",
+        return_value=mocker.MagicMock(title="T"),
+    )
+
+    fetch_and_extract("https://example.com/article", cookies={"my": "cookie"})
+
+    mock_auto.assert_not_called()
+
+
+def test_fetch_passes_saved_cookies_to_http_get(mocker):
+    """When auto-load returns cookies, they are passed to the HTTP client."""
+    saved = {"substack.sid": "tok123"}
+    mocker.patch("audio_articles.core.fetcher._get_saved_cookies", return_value=saved)
+    mock_resp = mocker.MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.text = '{"title": "T", "body_html": "<p>Body.</p>", "canonical_url": "https://foo.substack.com/p/article"}'
+    mock_get = mocker.patch("audio_articles.core.fetcher.cffi_requests.get", return_value=mock_resp)
+    mocker.patch("audio_articles.core.fetcher.trafilatura.extract", return_value="Body.")
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract_metadata",
+        return_value=mocker.MagicMock(title="T"),
+    )
+
+    fetch_and_extract("https://foo.substack.com/p/article")
+
+    call_kwargs = mock_get.call_args.kwargs
+    assert call_kwargs["cookies"] == saved
