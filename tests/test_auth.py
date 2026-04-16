@@ -152,3 +152,63 @@ def test_medium_custom_domains_is_frozenset():
     assert isinstance(MEDIUM_CUSTOM_DOMAINS, frozenset)
     assert "towardsdatascience.com" in MEDIUM_CUSTOM_DOMAINS
     assert "betterprogramming.pub" in MEDIUM_CUSTOM_DOMAINS
+
+
+from audio_articles.core.auth import login_interactive
+from audio_articles.core.exceptions import LoginError
+
+
+def test_login_raises_for_unknown_platform(session_dir: Path):
+    with pytest.raises(LoginError, match="Unknown platform"):
+        login_interactive("twitter", session_dir=session_dir)
+
+
+def test_login_raises_when_playwright_not_installed(mocker, session_dir: Path):
+    # Patch the already-bound module-level name rather than sys.modules,
+    # since the import runs at module load time and would be too late to intercept.
+    mocker.patch("audio_articles.core.auth.sync_playwright", None)
+    with pytest.raises(LoginError, match="Playwright is not installed"):
+        login_interactive("substack", session_dir=session_dir)
+
+
+def test_login_raises_on_timeout(mocker, session_dir: Path):
+    mock_page = mocker.MagicMock()
+    mock_page.url = "https://substack.com/sign-in"  # never changes
+    mock_context = mocker.MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = mocker.MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_playwright_ctx = mocker.MagicMock()
+    mock_playwright_ctx.__enter__ = lambda s: mock_playwright_ctx
+    mock_playwright_ctx.__exit__ = mocker.MagicMock(return_value=False)
+    mock_playwright_ctx.chromium.launch.return_value = mock_browser
+
+    mocker.patch("audio_articles.core.auth.sync_playwright", return_value=mock_playwright_ctx)
+    # timeout=0 means deadline expires before the loop body runs — no sleep mock needed
+
+    with pytest.raises(LoginError, match="timed out"):
+        login_interactive("substack", session_dir=session_dir, timeout=0)
+
+
+def test_login_saves_cookies_on_success(mocker, session_dir: Path):
+    saved_cookies = [{"name": "substack.sid", "value": "tok", "domain": ".substack.com"}]
+    mock_page = mocker.MagicMock()
+    # Simulate URL changing to feed after first sleep
+    mock_page.url = "https://substack.com/feed"
+    mock_context = mocker.MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_context.cookies.return_value = saved_cookies
+    mock_browser = mocker.MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_playwright_ctx = mocker.MagicMock()
+    mock_playwright_ctx.__enter__ = lambda s: mock_playwright_ctx
+    mock_playwright_ctx.__exit__ = mocker.MagicMock(return_value=False)
+    mock_playwright_ctx.chromium.launch.return_value = mock_browser
+
+    mocker.patch("audio_articles.core.auth.sync_playwright", return_value=mock_playwright_ctx)
+    mocker.patch("audio_articles.core.auth.time.sleep")
+
+    login_interactive("substack", session_dir=session_dir, timeout=60)
+
+    store = SessionStore(session_dir=session_dir)
+    assert store.load("substack") == saved_cookies

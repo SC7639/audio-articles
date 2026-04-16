@@ -99,3 +99,85 @@ def get_medium_cookies(*, session_dir: Path | None = None) -> dict[str, str] | N
     if cookies is None:
         return None
     return _cookies_list_to_dict(cookies)
+
+
+# ── Platform login config ─────────────────────────────────────────────────
+
+_PLATFORMS = frozenset({"substack", "medium"})
+
+_PLATFORM_LOGIN_URLS: dict[str, str] = {
+    "substack": "https://substack.com/sign-in",
+    "medium": "https://medium.com/m/signin",
+}
+
+
+def _is_logged_in_substack(url: str) -> bool:
+    return "substack.com/feed" in url or "substack.com/inbox" in url
+
+
+def _is_logged_in_medium(url: str) -> bool:
+    return "medium.com" in url and "signin" not in url and "sign-in" not in url
+
+
+_IS_LOGGED_IN: dict[str, object] = {
+    "substack": _is_logged_in_substack,
+    "medium": _is_logged_in_medium,
+}
+
+
+# ── Interactive login ─────────────────────────────────────────────────────
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None  # type: ignore[assignment]
+
+
+def login_interactive(
+    platform: str,
+    *,
+    session_dir: Path | None = None,
+    timeout: int = 300,
+) -> None:
+    """Open a headed Chromium browser, wait for the user to log in, then save cookies.
+
+    Args:
+        platform: 'substack' or 'medium'
+        session_dir: override cookie storage directory (used in tests)
+        timeout: seconds to wait for login before raising LoginError
+    """
+    platform = platform.lower()
+    if platform not in _PLATFORMS:
+        raise LoginError(
+            f"Unknown platform '{platform}'. Supported: {', '.join(sorted(_PLATFORMS))}"
+        )
+
+    if sync_playwright is None:
+        raise LoginError(
+            "Playwright is not installed. Run:\n"
+            "  pip install 'audio-articles[login]'\n"
+            "  playwright install chromium"
+        )
+
+    login_url = _PLATFORM_LOGIN_URLS[platform]
+    is_logged_in = _IS_LOGGED_IN[platform]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(login_url)
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if is_logged_in(page.url):
+                break
+            time.sleep(1)
+        else:
+            browser.close()
+            raise LoginError("Login timed out. Please try again.")
+
+        cookies = context.cookies()
+        browser.close()
+
+    SessionStore(session_dir).save(platform, cookies)
