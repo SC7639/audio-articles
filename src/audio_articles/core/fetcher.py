@@ -39,6 +39,24 @@ def _get_saved_cookies(url: str) -> dict[str, str] | None:
     return get_cookies_for_url(url)
 
 
+# HTML signatures that identify a Medium-hosted page
+_MEDIUM_HTML_MARKERS = (
+    "cdn-client.medium.com",
+    'content="Medium"',
+)
+
+
+def _is_medium_html(html: str) -> bool:
+    """Return True if the HTML contains markers that identify a Medium-hosted page."""
+    return any(marker in html for marker in _MEDIUM_HTML_MARKERS)
+
+
+def _get_medium_cookies() -> dict[str, str] | None:
+    """Load saved Medium session cookies (used for post-fetch custom-domain detection)."""
+    from .auth import get_medium_cookies
+    return get_medium_cookies()
+
+
 def fetch_and_extract(
     url: str,
     *,
@@ -51,7 +69,8 @@ def fetch_and_extract(
     which bypasses Cloudflare bot protection on the reader page.
 
     If no `cookies` are provided, saved login sessions are loaded automatically
-    for Substack and Medium URLs.
+    for Substack and Medium URLs. Unknown Medium custom domains are detected
+    post-fetch via HTML markers and retried with saved Medium cookies if available.
     """
     _cookies = cookies
     if _cookies is None:
@@ -60,8 +79,20 @@ def fetch_and_extract(
     m = _SUBSTACK_POST_RE.match(url)
     if m:
         return _fetch_substack_api(m.group(1), m.group(2), timeout=timeout, cookies=_cookies)
+
     raw_html = _fetch_html(url, timeout=timeout, cookies=_cookies)
-    return _extract_from_html(raw_html, source_url=url)
+    result = _extract_from_html(raw_html, source_url=url)
+
+    # Post-fetch: unknown Medium custom domain detection.
+    # Only triggered when no cookies were applied (_cookies is None) and the
+    # content is suspiciously short with Medium HTML markers present.
+    if _cookies is None and result.word_count < 200 and _is_medium_html(raw_html):
+        medium_cookies = _get_medium_cookies()
+        if medium_cookies is not None:
+            raw_html = _fetch_html(url, timeout=timeout, cookies=medium_cookies)
+            result = _extract_from_html(raw_html, source_url=url)
+
+    return result
 
 
 def _fetch_substack_api(

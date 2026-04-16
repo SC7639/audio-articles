@@ -115,3 +115,83 @@ def test_fetch_passes_saved_cookies_to_http_get(mocker):
 
     call_kwargs = mock_get.call_args.kwargs
     assert call_kwargs["cookies"] == saved
+
+
+from audio_articles.core.fetcher import _is_medium_html
+
+
+def test_is_medium_html_detects_cdn_script():
+    html = '<script src="https://cdn-client.medium.com/lite/bundle.js"></script>'
+    assert _is_medium_html(html) is True
+
+
+def test_is_medium_html_detects_og_site_name():
+    html = '<meta property="og:site_name" content="Medium"/>'
+    assert _is_medium_html(html) is True
+
+
+def test_is_medium_html_returns_false_for_non_medium():
+    html = "<html><body><p>Hello world</p></body></html>"
+    assert _is_medium_html(html) is False
+
+
+def test_fetch_retries_with_medium_cookies_for_unknown_custom_domain(mocker):
+    """If HTML has Medium markers and content is short, retries with saved Medium cookies."""
+    medium_html = (
+        '<script src="https://cdn-client.medium.com/a.js"></script>'
+        "<p>Short.</p>"
+    )
+    full_text = "Full article content. " * 70  # > 200 words
+
+    mocker.patch("audio_articles.core.fetcher._get_saved_cookies", return_value=None)
+    mocker.patch(
+        "audio_articles.core.fetcher._get_medium_cookies",
+        return_value={"uid": "123", "sid": "abc"},
+    )
+
+    mock_resp_short = mocker.MagicMock()
+    mock_resp_short.raise_for_status.return_value = None
+    mock_resp_short.text = medium_html
+
+    mock_resp_full = mocker.MagicMock()
+    mock_resp_full.raise_for_status.return_value = None
+    mock_resp_full.text = "<html><body><p>" + full_text + "</p></body></html>"
+
+    mocker.patch(
+        "audio_articles.core.fetcher.cffi_requests.get",
+        side_effect=[mock_resp_short, mock_resp_full],
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract",
+        side_effect=["Short.", full_text],
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract_metadata",
+        return_value=mocker.MagicMock(title="Article"),
+    )
+
+    result = fetch_and_extract("https://unknown-medium-pub.com/article")
+    assert result.word_count > 200
+
+
+def test_fetch_does_not_retry_when_no_medium_session(mocker):
+    """If Medium HTML detected but no session saved, no retry occurs."""
+    medium_html = '<script src="https://cdn-client.medium.com/a.js"></script><p>Short.</p>'
+
+    mocker.patch("audio_articles.core.fetcher._get_saved_cookies", return_value=None)
+    mocker.patch("audio_articles.core.fetcher._get_medium_cookies", return_value=None)
+
+    mock_resp = mocker.MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.text = medium_html
+    mock_get = mocker.patch(
+        "audio_articles.core.fetcher.cffi_requests.get", return_value=mock_resp
+    )
+    mocker.patch("audio_articles.core.fetcher.trafilatura.extract", return_value="Short.")
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract_metadata",
+        return_value=mocker.MagicMock(title="T"),
+    )
+
+    fetch_and_extract("https://unknown-medium-pub.com/article")
+    assert mock_get.call_count == 1  # no retry
