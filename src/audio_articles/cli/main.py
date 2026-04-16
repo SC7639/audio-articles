@@ -42,6 +42,8 @@ def convert(
     interactive: Annotated[bool, typer.Option("--interactive", "-i", help="After converting, enter interactive Q&A mode.")] = False,
     cookies: Annotated[Path | None, typer.Option("--cookies", "-c", help="Netscape cookie file (export from browser) for authenticated fetching.")] = None,
     local: Annotated[bool, typer.Option("--local", "-l", help="Use Ollama + edge-tts (free, no API keys required).")] = False,
+    no_summary: Annotated[bool, typer.Option("--no-summary", help="Skip summarization and convert the entire article verbatim to audio.")] = False,
+    words: Annotated[int | None, typer.Option("--words", "-w", help="Target word count for the summary (overrides SCRIPT_WORD_TARGET env var).")] = None,
 ) -> None:
     """
     Convert an article (URL, file, or inline text) to an MP3 audiobook.
@@ -65,11 +67,14 @@ def convert(
         console.print("[red]Error:[/red] Provide only one of --url, --file, or --text.")
         raise typer.Exit(1)
 
-    # Apply voice override before pipeline runs
-    if voice:
+    # Apply overrides before pipeline runs
+    if voice or words:
         from audio_articles.core.config import get_settings
         s = get_settings()
-        object.__setattr__(s, "tts_voice", voice)
+        if voice:
+            object.__setattr__(s, "tts_voice", voice)
+        if words:
+            object.__setattr__(s, "script_word_target", words)
 
     extraction = None
     try:
@@ -80,14 +85,15 @@ def convert(
                     console.print(f"[red]Error:[/red] File not found: {file}")
                     raise typer.Exit(1)
                 if interactive or script_only:
-                    result, extraction = run_full_from_file(file, title=title)
+                    result, extraction = run_full_from_file(file, title=title, no_summary=no_summary)
                 else:
                     from audio_articles.core.pipeline import run_from_file
-                    result = run_from_file(file, title=title)
+                    result = run_from_file(file, title=title, no_summary=no_summary)
             else:
-                progress.add_task("Fetching article, summarizing, and synthesizing audio…")
+                task_desc = "Fetching article and synthesizing audio…" if no_summary else "Fetching article, summarizing, and synthesizing audio…"
+                progress.add_task(task_desc)
                 loaded_cookies = load_cookies_file(cookies) if cookies else None
-                article_input = ArticleInput(url=url, text=text, title=title, cookies=loaded_cookies, local=local)
+                article_input = ArticleInput(url=url, text=text, title=title, cookies=loaded_cookies, local=local, no_summary=no_summary)
                 if interactive or script_only:
                     result, extraction = run_full(article_input)
                 else:

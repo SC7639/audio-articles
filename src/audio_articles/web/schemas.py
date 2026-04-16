@@ -8,6 +8,8 @@ class ConvertRequest(BaseModel):
     text: str | None = None
     title: str | None = None
     voice: str | None = None
+    no_summary: bool = False
+    words: int | None = None
 
 
 class ScriptResponse(BaseModel):

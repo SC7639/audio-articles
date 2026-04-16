@@ -3,7 +3,7 @@ from pathlib import Path
 
 from .config import get_settings
 from .fetcher import extract_from_file, extract_from_text, fetch_and_extract
-from .models import ArticleInput, AudiobookResult, ExtractionResult
+from .models import ArticleInput, AudiobookResult, ExtractionResult, ScriptResult
 from .summarizer import summarize
 from .tts import synthesize
 
@@ -22,7 +22,14 @@ def run_full(article_input: ArticleInput) -> tuple[AudiobookResult, ExtractionRe
         extraction = extract_from_text(text, title=article_input.title or "Article")
 
     local = article_input.local
-    script_result = summarize(extraction, local=local)
+    if article_input.no_summary:
+        script_result = ScriptResult(
+            script=extraction.body,
+            word_count=extraction.word_count,
+            chunks_used=1,
+        )
+    else:
+        script_result = summarize(extraction, local=local)
     audio_bytes = synthesize(script_result, local=local)
 
     result = AudiobookResult(
@@ -47,11 +54,18 @@ def run(article_input: ArticleInput) -> AudiobookResult:
 
 
 def run_full_from_file(
-    path: Path, title: str | None = None
+    path: Path, title: str | None = None, no_summary: bool = False
 ) -> tuple[AudiobookResult, ExtractionResult]:
     """Convenience wrapper for files, returning both audiobook and extraction."""
     extraction = extract_from_file(path, title=title)
-    script_result = summarize(extraction)
+    if no_summary:
+        script_result = ScriptResult(
+            script=extraction.body,
+            word_count=extraction.word_count,
+            chunks_used=1,
+        )
+    else:
+        script_result = summarize(extraction)
     audio_bytes = synthesize(script_result)
     result = AudiobookResult(
         audio_bytes=audio_bytes,
@@ -61,9 +75,9 @@ def run_full_from_file(
     return result, extraction
 
 
-def run_from_file(path: Path, title: str | None = None) -> AudiobookResult:
+def run_from_file(path: Path, title: str | None = None, no_summary: bool = False) -> AudiobookResult:
     """Convenience wrapper that reads a file and runs the full pipeline."""
-    result, _ = run_full_from_file(path, title=title)
+    result, _ = run_full_from_file(path, title=title, no_summary=no_summary)
     return result
 
 
