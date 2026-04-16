@@ -16,6 +16,7 @@
     #audio-section { display: none; margin-top: 1.5rem; }
     audio { width: 100%; }
     .error { color: var(--pico-del-color); margin-top: 0.75rem; }
+    #success-msg { display: none; margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px; background: var(--pico-ins-color); color: #fff; font-size: 0.9rem; }
     .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
     .actions button { flex: 1; }
     #spinner { display: none; }
@@ -108,6 +109,7 @@
       <p id="progress-count"></p>
     </div>
     <p id="error-msg" class="error"></p>
+    <div id="success-msg"></div>
 
     <section id="script-preview">
       <h3>Script preview</h3>
@@ -226,6 +228,7 @@
       document.getElementById('btn-convert').disabled = true;
       document.getElementById('btn-preview').disabled = true;
       document.getElementById('audio-section').style.display = 'none';
+      document.getElementById('success-msg').style.display = 'none';
       document.getElementById('progress-section').style.display = 'block';
       document.getElementById('progress-step').textContent = 'Starting\u2026';
       document.getElementById('progress-count').textContent = '';
@@ -267,6 +270,9 @@
                 document.getElementById('audio-meta').textContent =
                   event.words ? `${event.words} words` : '';
                 document.getElementById('audio-section').style.display = '';
+                const successEl = document.getElementById('success-msg');
+                successEl.textContent = `✓ "${event.title}" converted — ${event.words} words`;
+                successEl.style.display = 'block';
                 showChat({ url: payload.url, text: payload.text, title: payload.title });
               } else {
                 document.getElementById('progress-step').textContent = event.status;

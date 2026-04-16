@@ -25,3 +25,6 @@ clean:  ## Remove the virtualenv
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+
+dev:  ## Activate virtualenv
+	@./dev.sh
