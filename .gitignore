@@ -18,3 +18,9 @@ output/
 htmlcov/
 .coverage
 substack.txt
+
+# Claude Code git worktrees (named by flattening the absolute path)
+home*/
+
+# Local test/scratch files
+.vibeyardignore
