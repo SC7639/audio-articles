@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -20,8 +21,11 @@ class SessionStore:
         return self._dir / f"{platform}.json"
 
     def save(self, platform: str, cookies: list[dict]) -> None:
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._path(platform).write_text(json.dumps(cookies), encoding="utf-8")
+        self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = self._path(platform)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(cookies))
 
     def load(self, platform: str) -> list[dict] | None:
         p = self._path(platform)
@@ -116,7 +120,10 @@ def _is_logged_in_substack(url: str) -> bool:
 
 
 def _is_logged_in_medium(url: str) -> bool:
-    return "medium.com" in url and "signin" not in url and "sign-in" not in url
+    # Medium redirects to /me/... or the homepage root after successful login
+    return "medium.com" in url and (
+        "/me/" in url or url.rstrip("/").endswith("medium.com")
+    )
 
 
 _IS_LOGGED_IN: dict[str, object] = {

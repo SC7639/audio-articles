@@ -21,6 +21,11 @@ def test_save_and_load_round_trip(store: SessionStore, session_dir: Path):
     store.save("substack", cookies)
     loaded = store.load("substack")
     assert loaded == cookies
+    # Verify the file is not world-readable (credentials must be user-only)
+    import stat
+    file_mode = (session_dir / "substack.json").stat().st_mode
+    assert not (file_mode & stat.S_IRGRP), "File must not be group-readable"
+    assert not (file_mode & stat.S_IROTH), "File must not be world-readable"
 
 
 def test_load_returns_none_when_no_file(store: SessionStore):

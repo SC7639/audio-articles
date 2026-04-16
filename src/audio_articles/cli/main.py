@@ -249,6 +249,14 @@ def logout(
         )
         raise typer.Exit(1)
 
+    _SUPPORTED = {"substack", "medium"}
+    if platform.lower() not in _SUPPORTED:
+        console.print(
+            f"[red]Error:[/red] Unknown platform '{platform}'. "
+            f"Supported: {', '.join(sorted(_SUPPORTED))}"
+        )
+        raise typer.Exit(1)
+
     store.delete(platform.lower())
     console.print(f"[green]Session deleted for {platform.capitalize()}.[/green]")
 
