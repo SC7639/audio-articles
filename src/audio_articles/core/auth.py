@@ -121,13 +121,35 @@ _SESSION_COOKIE: dict[str, str] = {
     "medium": "uid",
 }
 
+# URL prefixes that are part of the signin flow for each platform.
+# When the browser is still on one of these, the session cookie may exist but
+# authentication is not yet complete (e.g. Medium sets uid as an anonymous ID).
+_SIGNIN_URL_PREFIXES: dict[str, tuple[str, ...]] = {
+    "medium": (
+        "https://medium.com/m/signin",
+        "https://medium.com/m/callback",
+        "https://accounts.google.com/",
+        "https://appleid.apple.com/",
+        "https://www.facebook.com/login",
+    ),
+}
 
-def _has_session_cookie(context, platform: str) -> bool:
-    """Return True if the browser context has the expected session cookie for platform."""
+
+def _has_session_cookie(context, page, platform: str) -> bool:
+    """Return True if login is complete: session cookie present and signin page exited."""
     expected = _SESSION_COOKIE.get(platform)
     if expected is None:
         return False
-    return any(c["name"] == expected for c in context.cookies())
+    if not any(c["name"] == expected for c in context.cookies()):
+        return False
+    # For platforms that set the session cookie during the signin flow itself,
+    # also verify the browser has navigated away from all signin/OAuth pages.
+    signin_prefixes = _SIGNIN_URL_PREFIXES.get(platform, ())
+    if signin_prefixes:
+        current_url = page.url
+        if any(current_url.startswith(p) for p in signin_prefixes):
+            return False
+    return True
 
 
 # ── Interactive login ─────────────────────────────────────────────────────
@@ -174,7 +196,7 @@ def login_interactive(
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if _has_session_cookie(context, platform):
+            if _has_session_cookie(context, page, platform):
                 break
             time.sleep(1)
         else:

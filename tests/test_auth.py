@@ -217,3 +217,50 @@ def test_login_saves_cookies_on_success(mocker, session_dir: Path):
 
     store = SessionStore(session_dir=session_dir)
     assert store.load("substack") == saved_cookies
+
+
+def test_medium_login_not_detected_while_on_signin_page(mocker, session_dir: Path):
+    """Medium sets uid as an anonymous cookie on page load; browser must not close early."""
+    uid_cookie = [{"name": "uid", "value": "anon", "domain": ".medium.com"}]
+    mock_page = mocker.MagicMock()
+    # uid cookie present, but still on the signin page
+    mock_page.url = "https://medium.com/m/signin"
+    mock_context = mocker.MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_context.cookies.return_value = uid_cookie
+    mock_browser = mocker.MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_playwright_ctx = mocker.MagicMock()
+    mock_playwright_ctx.__enter__ = lambda s: mock_playwright_ctx
+    mock_playwright_ctx.__exit__ = mocker.MagicMock(return_value=False)
+    mock_playwright_ctx.chromium.launch.return_value = mock_browser
+
+    mocker.patch("audio_articles.core.auth.sync_playwright", return_value=mock_playwright_ctx)
+
+    # timeout=0: loop expires without ever detecting login
+    with pytest.raises(LoginError, match="timed out"):
+        login_interactive("medium", session_dir=session_dir, timeout=0)
+
+
+def test_medium_login_detected_after_leaving_signin_page(mocker, session_dir: Path):
+    """Login succeeds once uid cookie is present and browser is on medium.com home."""
+    saved_cookies = [{"name": "uid", "value": "123456", "domain": ".medium.com"}]
+    mock_page = mocker.MagicMock()
+    mock_page.url = "https://medium.com/"
+    mock_context = mocker.MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_context.cookies.return_value = saved_cookies
+    mock_browser = mocker.MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_playwright_ctx = mocker.MagicMock()
+    mock_playwright_ctx.__enter__ = lambda s: mock_playwright_ctx
+    mock_playwright_ctx.__exit__ = mocker.MagicMock(return_value=False)
+    mock_playwright_ctx.chromium.launch.return_value = mock_browser
+
+    mocker.patch("audio_articles.core.auth.sync_playwright", return_value=mock_playwright_ctx)
+    mocker.patch("audio_articles.core.auth.time.sleep")
+
+    login_interactive("medium", session_dir=session_dir, timeout=60)
+
+    store = SessionStore(session_dir=session_dir)
+    assert store.load("medium") == saved_cookies
