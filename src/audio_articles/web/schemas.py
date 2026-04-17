@@ -8,6 +8,7 @@ class ConvertRequest(BaseModel):
     text: str | None = None
     title: str | None = None
     voice: str | None = None
+    local: bool = False
 
 
 class ScriptResponse(BaseModel):
@@ -28,3 +29,11 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+
+
+class FileInfo(BaseModel):
+    name: str
+    filename: str
+    size_bytes: int
+    created_at: str
+    url: str

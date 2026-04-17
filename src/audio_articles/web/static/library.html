@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audio Library</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+  <style>
+    body { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: var(--pico-muted-color); margin-bottom: 2rem; }
+    .back-link { font-size: 0.9rem; color: var(--pico-muted-color); text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem; margin-bottom: 1.5rem; }
+    .back-link:hover { color: var(--pico-primary); }
+    details {
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: 10px;
+      margin-bottom: 0.75rem;
+      overflow: hidden;
+      transition: box-shadow 0.15s ease;
+    }
+    details:hover {
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    }
+    details[open] {
+      border-color: var(--pico-primary-border);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.09);
+    }
+    details summary {
+      font-weight: 600;
+      word-break: break-word;
+      padding: 1rem 1.25rem;
+      background: var(--pico-card-background-color);
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      user-select: none;
+    }
+    details summary::-webkit-details-marker { display: none; }
+    details summary::after {
+      content: '▾';
+      font-size: 1rem;
+      color: var(--pico-muted-color);
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+    details[open] summary::after {
+      transform: rotate(-180deg);
+    }
+    details summary:hover {
+      background: var(--pico-code-background-color);
+    }
+    .accordion-body {
+      padding: 1.25rem;
+      border-top: 1px solid var(--pico-muted-border-color);
+      background: var(--pico-background-color);
+    }
+    .file-meta {
+      color: var(--pico-muted-color);
+      font-size: 0.8rem;
+      margin-bottom: 1rem;
+      display: flex;
+      gap: 1.25rem;
+      flex-wrap: wrap;
+    }
+    .file-meta span { display: flex; align-items: center; gap: 0.3rem; }
+    audio { width: 100%; margin-bottom: 1rem; }
+    .download-btn { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; }
+    .empty-state { text-align: center; padding: 3rem 1rem; color: var(--pico-muted-color); }
+    .empty-state p { margin-bottom: 0.5rem; }
+    #loading { text-align: center; padding: 2rem; color: var(--pico-muted-color); }
+    .error { color: var(--pico-del-color); }
+  </style>
+</head>
+<body>
+  <a href="/" class="back-link">&#8592; Back to converter</a>
+  <h1>Audio Library</h1>
+  <p class="subtitle">All saved audiobooks on this device</p>
+
+  <div id="loading" aria-busy="true">Loading files&hellip;</div>
+  <div id="file-list" style="display:none;"></div>
+  <div id="empty-state" class="empty-state" style="display:none;">
+    <p>No audiobooks yet.</p>
+    <p><a href="/">Convert an article</a> to get started.</p>
+  </div>
+  <div id="error-msg" class="error" style="display:none;"></div>
+
+  <script>
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function formatDate(iso) {
+      const d = new Date(iso);
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) +
+        ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function loadFiles() {
+      const loading = document.getElementById('loading');
+      const fileList = document.getElementById('file-list');
+      const emptyState = document.getElementById('empty-state');
+      const errorMsg = document.getElementById('error-msg');
+
+      try {
+        const res = await fetch('/api/v1/files');
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        const files = await res.json();
+
+        loading.style.display = 'none';
+
+        if (files.length === 0) {
+          emptyState.style.display = 'block';
+          return;
+        }
+
+        fileList.style.display = 'block';
+        fileList.innerHTML = files.map(f => `
+          <details>
+            <summary>${escapeHtml(f.name)}</summary>
+            <div class="accordion-body">
+              <div class="file-meta">
+                <span>&#128190; ${formatBytes(f.size_bytes)}</span>
+                <span>&#128337; ${formatDate(f.created_at)}</span>
+              </div>
+              <audio controls preload="none" src="${f.url}"></audio>
+              <a href="${f.url}" download="${escapeAttr(f.filename)}" class="download-btn" role="button">
+                &#8615; Download MP3
+              </a>
+            </div>
+          </details>
+        `).join('');
+      } catch (err) {
+        loading.style.display = 'none';
+        errorMsg.style.display = 'block';
+        errorMsg.textContent = 'Could not load files: ' + err.message;
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function escapeAttr(str) {
+      return str.replace(/"/g, '&quot;');
+    }
+
+    loadFiles();
+  </script>
+</body>
+</html>
