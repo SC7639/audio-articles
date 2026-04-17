@@ -195,3 +195,80 @@ def test_fetch_does_not_retry_when_no_medium_session(mocker):
 
     fetch_and_extract("https://unknown-medium-pub.com/article")
     assert mock_get.call_count == 1  # no retry
+
+
+# ── Playwright 403 fallback ───────────────────────────────────────────────────
+
+def test_fetch_falls_back_to_playwright_on_403_with_session(mocker):
+    """When curl_cffi gets 403 and a session exists, retries with headless Playwright."""
+    from curl_cffi.requests.exceptions import HTTPError
+
+    full_cookies = [{"name": "uid", "value": "123", "domain": ".medium.com", "path": "/"}]
+
+    mock_response = mocker.MagicMock(status_code=403)
+    mocker.patch(
+        "audio_articles.core.fetcher.cffi_requests.get",
+        side_effect=HTTPError("403", response=mock_response),
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher._get_saved_cookies",
+        return_value={"uid": "123"},
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher._get_full_session_cookies",
+        return_value=full_cookies,
+    )
+    mock_playwright_fetch = mocker.patch(
+        "audio_articles.core.fetcher._fetch_html_playwright",
+        return_value="<html><body><article>Full article body text here.</article></body></html>",
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract",
+        return_value="Full article body text here.",
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract_metadata",
+        return_value=mocker.MagicMock(title="Article"),
+    )
+
+    result = fetch_and_extract("https://medium.com/@user/article")
+
+    mock_playwright_fetch.assert_called_once()
+    assert result.body == "Full article body text here."
+
+
+def test_fetch_does_not_fall_back_to_playwright_without_session(mocker):
+    """403 with no saved session re-raises the original error."""
+    from curl_cffi.requests.exceptions import HTTPError
+
+    mock_response = mocker.MagicMock(status_code=403)
+    mocker.patch(
+        "audio_articles.core.fetcher.cffi_requests.get",
+        side_effect=HTTPError("403", response=mock_response),
+    )
+    mocker.patch("audio_articles.core.fetcher._get_saved_cookies", return_value=None)
+    mocker.patch("audio_articles.core.fetcher._get_full_session_cookies", return_value=None)
+
+    with pytest.raises(ExtractionError, match="HTTP 403"):
+        fetch_and_extract("https://medium.com/@user/article")
+
+
+def test_fetch_does_not_fall_back_to_playwright_on_non_403(mocker):
+    """Non-403 HTTP errors are not retried with Playwright."""
+    from curl_cffi.requests.exceptions import HTTPError
+
+    mock_response = mocker.MagicMock(status_code=404)
+    mocker.patch(
+        "audio_articles.core.fetcher.cffi_requests.get",
+        side_effect=HTTPError("404", response=mock_response),
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher._get_full_session_cookies",
+        return_value=[{"name": "uid", "value": "x", "domain": ".medium.com", "path": "/"}],
+    )
+    mock_playwright_fetch = mocker.patch("audio_articles.core.fetcher._fetch_html_playwright")
+
+    with pytest.raises(ExtractionError, match="HTTP 404"):
+        fetch_and_extract("https://medium.com/@user/article")
+
+    mock_playwright_fetch.assert_not_called()

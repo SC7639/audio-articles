@@ -57,6 +57,45 @@ def _get_medium_cookies() -> dict[str, str] | None:
     return get_medium_cookies()
 
 
+def _fetch_html_playwright(url: str, *, timeout: float, cookies: list[dict]) -> str:
+    """Fetch a page using headless Playwright with saved session cookies.
+
+    Used as a fallback when curl_cffi is blocked by bot detection (403).
+    Playwright executes real JavaScript and passes browser fingerprint checks
+    that TLS impersonation alone cannot handle.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise ExtractionError(
+            "Playwright is not installed. Run:\n"
+            "  uv sync --extra login\n"
+            "  playwright install chromium"
+        ) from exc
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        if cookies:
+            context.add_cookies(cookies)
+        page = context.new_page()
+        try:
+            page.goto(url, timeout=int(timeout * 1000), wait_until="domcontentloaded")
+            content = page.content()
+        finally:
+            browser.close()
+    return content
+
+
+def _get_full_session_cookies(url: str) -> list[dict] | None:
+    """Return the raw cookie list (with domain info) for the platform matching url."""
+    from .auth import SessionStore, _platform_for_url
+    platform = _platform_for_url(url)
+    if platform is None:
+        return None
+    return SessionStore().load(platform)
+
+
 def fetch_and_extract(
     url: str,
     *,
@@ -71,6 +110,10 @@ def fetch_and_extract(
     If no `cookies` are provided, saved login sessions are loaded automatically
     for Substack and Medium URLs. Unknown Medium custom domains are detected
     post-fetch via HTML markers and retried with saved Medium cookies if available.
+
+    If curl_cffi receives a 403 and there are saved session cookies for the URL's
+    platform, the fetch is retried with headless Playwright (which passes JS-based
+    bot-detection checks that TLS impersonation cannot).
     """
     _cookies = cookies
     if _cookies is None:
@@ -80,7 +123,16 @@ def fetch_and_extract(
     if m:
         return _fetch_substack_api(m.group(1), m.group(2), timeout=timeout, cookies=_cookies)
 
-    raw_html = _fetch_html(url, timeout=timeout, cookies=_cookies)
+    try:
+        raw_html = _fetch_html(url, timeout=timeout, cookies=_cookies)
+    except ExtractionError as exc:
+        if "HTTP 403" not in str(exc):
+            raise
+        full_cookies = _get_full_session_cookies(url)
+        if full_cookies is None:
+            raise
+        raw_html = _fetch_html_playwright(url, timeout=timeout, cookies=full_cookies)
+
     result = _extract_from_html(raw_html, source_url=url)
 
     # Post-fetch: unknown Medium custom domain detection.
