@@ -253,6 +253,54 @@ def test_fetch_does_not_fall_back_to_playwright_without_session(mocker):
         fetch_and_extract("https://medium.com/@user/article")
 
 
+from audio_articles.core.fetcher import _is_cloudflare_challenge
+
+
+def test_is_cloudflare_challenge_detects_challenge_script():
+    html = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>'
+    assert _is_cloudflare_challenge(html) is True
+
+
+def test_is_cloudflare_challenge_detects_cf_chl_opt():
+    html = "var cf_chl_opt={cvId:'2',cType:'managed'};"
+    assert _is_cloudflare_challenge(html) is True
+
+
+def test_is_cloudflare_challenge_returns_false_for_normal_page():
+    html = "<html><body><article>Normal article content.</article></body></html>"
+    assert _is_cloudflare_challenge(html) is False
+
+
+def test_fetch_falls_back_to_playwright_on_cloudflare_challenge(mocker):
+    """Cloudflare challenge page (HTTP 200) triggers headless Playwright fallback."""
+    challenge_html = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>'
+    article_html = "<html><body><article>Real article content here.</article></body></html>"
+
+    mock_resp = mocker.MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.text = challenge_html
+    mocker.patch("audio_articles.core.fetcher.cffi_requests.get", return_value=mock_resp)
+    mocker.patch("audio_articles.core.fetcher._get_saved_cookies", return_value=None)
+    mocker.patch("audio_articles.core.fetcher._get_full_session_cookies", return_value=[])
+    mock_playwright_fetch = mocker.patch(
+        "audio_articles.core.fetcher._fetch_html_playwright",
+        return_value=article_html,
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract",
+        return_value="Real article content here.",
+    )
+    mocker.patch(
+        "audio_articles.core.fetcher.trafilatura.extract_metadata",
+        return_value=mocker.MagicMock(title="Article"),
+    )
+
+    result = fetch_and_extract("https://levelup.gitconnected.com/some-article")
+
+    mock_playwright_fetch.assert_called_once()
+    assert result.body == "Real article content here."
+
+
 def test_fetch_does_not_fall_back_to_playwright_on_non_403(mocker):
     """Non-403 HTTP errors are not retried with Playwright."""
     from curl_cffi.requests.exceptions import HTTPError

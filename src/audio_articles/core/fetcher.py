@@ -51,6 +51,19 @@ def _is_medium_html(html: str) -> bool:
     return any(marker in html for marker in _MEDIUM_HTML_MARKERS)
 
 
+# Cloudflare challenge pages are served as HTTP 200 but contain no article content.
+# The challenge script is always loaded from challenges.cloudflare.com.
+_CLOUDFLARE_MARKERS = (
+    "challenges.cloudflare.com",
+    "cf_chl_opt",
+)
+
+
+def _is_cloudflare_challenge(html: str) -> bool:
+    """Return True if the response HTML is a Cloudflare bot-detection challenge page."""
+    return any(marker in html for marker in _CLOUDFLARE_MARKERS)
+
+
 def _get_medium_cookies() -> dict[str, str] | None:
     """Load saved Medium session cookies (used for post-fetch custom-domain detection)."""
     from .auth import get_medium_cookies
@@ -131,6 +144,12 @@ def fetch_and_extract(
         full_cookies = _get_full_session_cookies(url)
         if full_cookies is None:
             raise
+        raw_html = _fetch_html_playwright(url, timeout=timeout, cookies=full_cookies)
+
+    # Cloudflare challenge pages are served as HTTP 200 but contain no article
+    # content. Playwright executes the real browser JS challenge to get past them.
+    if _is_cloudflare_challenge(raw_html):
+        full_cookies = _get_full_session_cookies(url) or []
         raw_html = _fetch_html_playwright(url, timeout=timeout, cookies=full_cookies)
 
     result = _extract_from_html(raw_html, source_url=url)
