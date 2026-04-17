@@ -177,6 +177,90 @@ def ask(
     console.print(answer)
 
 
+@app.command()
+def login(
+    platform: Annotated[str, typer.Argument(help="Platform to log in to: substack or medium")],
+) -> None:
+    """
+    Open a browser to log in to Substack or Medium and save the session.
+
+    After logging in, paywalled articles will be fetched automatically
+    without needing to pass --cookies each time.
+
+    Examples:
+
+      audio-articles login substack
+
+      audio-articles login medium
+    """
+    from audio_articles.core.auth import login_interactive
+    from audio_articles.core.exceptions import LoginError
+
+    console.print(f"\n[bold]Opening browser for {platform.capitalize()} login…[/bold]")
+    console.print(
+        "[dim]Log in as you normally would. "
+        "The browser will close automatically once you are signed in.[/dim]\n"
+    )
+
+    try:
+        login_interactive(platform)
+    except LoginError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]Session saved![/green] "
+        f"Paywalled {platform.capitalize()} articles will now work automatically."
+    )
+
+
+@app.command()
+def logout(
+    platform: Annotated[
+        str | None,
+        typer.Argument(help="Platform to log out from: substack or medium"),
+    ] = None,
+    all_: Annotated[
+        bool,
+        typer.Option("--all", help="Delete all saved sessions."),
+    ] = False,
+) -> None:
+    """
+    Delete a saved login session.
+
+    Examples:
+
+      audio-articles logout substack
+
+      audio-articles logout --all
+    """
+    from audio_articles.core.auth import SessionStore
+
+    store = SessionStore()
+
+    if all_:
+        store.delete_all()
+        console.print("[green]All sessions deleted.[/green]")
+        return
+
+    if platform is None:
+        console.print(
+            "[red]Error:[/red] Provide a platform (substack or medium) or use --all."
+        )
+        raise typer.Exit(1)
+
+    _SUPPORTED = {"substack", "medium"}
+    if platform.lower() not in _SUPPORTED:
+        console.print(
+            f"[red]Error:[/red] Unknown platform '{platform}'. "
+            f"Supported: {', '.join(sorted(_SUPPORTED))}"
+        )
+        raise typer.Exit(1)
+
+    store.delete(platform.lower())
+    console.print(f"[green]Session deleted for {platform.capitalize()}.[/green]")
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

@@ -12,3 +12,7 @@ class SummarizationError(AudioArticlesError):
 
 class TTSError(AudioArticlesError):
     """Raised when the OpenAI TTS API fails."""
+
+
+class LoginError(AudioArticlesError):
+    """Raised when an interactive login attempt fails or Playwright is missing."""
