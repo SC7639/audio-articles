@@ -207,9 +207,14 @@ def login_interactive(
     login_url = _PLATFORM_LOGIN_URLS[platform]
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = browser.new_context()
         page = context.new_page()
+        # Remove the webdriver flag that Cloudflare checks
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page.goto(login_url)
 
         # For platforms that set an anonymous session cookie before the user
