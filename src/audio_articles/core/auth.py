@@ -135,20 +135,38 @@ _SIGNIN_URL_PREFIXES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _has_session_cookie(context, page, platform: str) -> bool:
-    """Return True if login is complete: session cookie present and signin page exited."""
+_SENTINEL = object()  # distinguishes "no initial_value provided" from "initial_value was None"
+
+
+def _get_cookie_value(context, name: str) -> str | None:
+    """Return the value of a named cookie from the browser context, or None."""
+    return next((c["value"] for c in context.cookies() if c["name"] == name), None)
+
+
+def _has_session_cookie(context, page, platform: str, *, initial_value: str | None = _SENTINEL) -> bool:
+    """Return True if login is complete.
+
+    Checks three conditions:
+    1. The expected session cookie exists.
+    2. Its value has changed from the pre-login baseline (catches platforms like Medium
+       that set an anonymous session cookie before the user authenticates).
+    3. The browser is no longer on a signin/OAuth page.
+    """
     expected = _SESSION_COOKIE.get(platform)
     if expected is None:
         return False
-    if not any(c["name"] == expected for c in context.cookies()):
+    current_value = _get_cookie_value(context, expected)
+    if current_value is None:
         return False
-    # For platforms that set the session cookie during the signin flow itself,
-    # also verify the browser has navigated away from all signin/OAuth pages.
+    # If we captured the pre-login cookie value, require it to have changed.
+    # initial_value=None means the cookie was absent at page load; any value now is authenticated.
+    # initial_value=<str> means an anonymous cookie existed; wait for it to change.
+    if initial_value is not _SENTINEL and current_value == initial_value:
+        return False
+    # URL guard: verify the browser has left signin/OAuth pages.
     signin_prefixes = _SIGNIN_URL_PREFIXES.get(platform, ())
-    if signin_prefixes:
-        current_url = page.url
-        if any(current_url.startswith(p) for p in signin_prefixes):
-            return False
+    if signin_prefixes and any(page.url.startswith(p) for p in signin_prefixes):
+        return False
     return True
 
 
@@ -194,9 +212,18 @@ def login_interactive(
         page = context.new_page()
         page.goto(login_url)
 
+        # For platforms that set an anonymous session cookie before the user
+        # authenticates (e.g. Medium sets `uid` during the Cloudflare challenge),
+        # capture the initial cookie value so we can wait for it to change.
+        initial_value: object = _SENTINEL
+        if platform in _SIGNIN_URL_PREFIXES:
+            page.wait_for_load_state("domcontentloaded")
+            cookie_name = _SESSION_COOKIE[platform]
+            initial_value = _get_cookie_value(context, cookie_name)
+
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if _has_session_cookie(context, page, platform):
+            if _has_session_cookie(context, page, platform, initial_value=initial_value):
                 break
             time.sleep(1)
         else:
