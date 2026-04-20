@@ -18,12 +18,11 @@ from audio_articles.core.exceptions import (
     TTSError,
 )
 from audio_articles.core.fetcher import extract_from_text, fetch_and_extract
-from audio_articles.core.models import ArticleInput
+from audio_articles.core.models import ArticleInput, ScriptResult
 from audio_articles.core.pipeline import run
 from audio_articles.core.summarizer import summarize
 from audio_articles.core.tts import synthesize
 from audio_articles.core.qa import ask as qa_ask
-from audio_articles.core.summarizer import summarize
 
 from .schemas import ChatRequest, ChatResponse, ConvertRequest, FileInfo, ScriptResponse
 
@@ -42,6 +41,12 @@ def _apply_voice(voice: str) -> None:
     from audio_articles.core.config import get_settings
     s = get_settings()
     object.__setattr__(s, "tts_voice", voice)
+
+
+def _apply_words(words: int) -> None:
+    from audio_articles.core.config import get_settings
+    s = get_settings()
+    object.__setattr__(s, "script_word_target", words)
 
 
 @router.get("/health", summary="Health check")
@@ -84,8 +89,10 @@ async def convert_article(req: ConvertRequest):
 
     if req.voice:
         _apply_voice(req.voice)
+    if req.words:
+        _apply_words(req.words)
 
-    article_input = ArticleInput(url=req.url, text=req.text, title=req.title, local=req.local)
+    article_input = ArticleInput(url=req.url, text=req.text, title=req.title, local=req.local, no_summary=req.no_summary)
 
     try:
         result = await _in_thread(run, article_input)
@@ -185,13 +192,23 @@ async def get_script(req: ConvertRequest):
     if not req.url and not req.text:
         raise HTTPException(status_code=422, detail="Provide 'url' or 'text'.")
 
+    if req.words:
+        _apply_words(req.words)
+
     try:
         if req.url:
             extraction = await _in_thread(fetch_and_extract, str(req.url))
         else:
             extraction = extract_from_text(req.text or "", title=req.title or "Article")
 
-        script_result = await _in_thread(summarize, extraction)
+        if req.no_summary:
+            script_result = ScriptResult(
+                script=extraction.body,
+                word_count=extraction.word_count,
+                chunks_used=1,
+            )
+        else:
+            script_result = await _in_thread(summarize, extraction)
     except ExtractionError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except SummarizationError as exc:

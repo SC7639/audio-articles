@@ -9,6 +9,8 @@ class ConvertRequest(BaseModel):
     title: str | None = None
     voice: str | None = None
     local: bool = False
+    no_summary: bool = False
+    words: int | None = None
 
 
 class ScriptResponse(BaseModel):

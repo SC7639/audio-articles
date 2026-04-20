@@ -96,6 +96,16 @@
     <p id="local-hint" class="hint" style="font-size:0.8rem; margin-top:0.25rem; margin-bottom:1rem;">Uses Ollama + edge-tts &mdash; no API keys required</p>
     <p id="local-note" style="display:none; font-size:0.8rem; color:var(--pico-muted-color);">Voice is configured via <code>EDGE_TTS_VOICE</code> in <code>.env</code></p>
 
+    <label>
+      <input id="no-summary-check" type="checkbox" role="switch" onchange="toggleWordsRow()" />
+      Skip summarization — read full article verbatim
+    </label>
+
+    <div id="words-row" style="margin-top: 0.5rem;">
+      <label for="words-input">Summary length <small class="hint">(words, default 400)</small></label>
+      <input id="words-input" type="number" min="50" max="5000" placeholder="400" />
+    </div>
+
     <div class="actions">
       <button id="btn-preview" onclick="previewScript()" class="secondary">Preview script</button>
       <button id="btn-convert" onclick="convertAudio()">Generate audio</button>
@@ -156,18 +166,28 @@
       document.getElementById('btn-text').className = m === 'text' ? '' : 'secondary';
     }
 
+    function toggleWordsRow() {
+      const noSummary = document.getElementById('no-summary-check').checked;
+      const wordsRow = document.getElementById('words-row');
+      wordsRow.style.opacity = noSummary ? '0.4' : '1';
+      wordsRow.querySelector('input').disabled = noSummary;
+    }
+
     function getPayload() {
       const local = document.getElementById('local-toggle').checked;
       const voice = local ? undefined : document.getElementById('voice-select').value;
+      const no_summary = document.getElementById('no-summary-check').checked;
+      const wordsVal = document.getElementById('words-input').value.trim();
+      const words = (!no_summary && wordsVal) ? parseInt(wordsVal, 10) : undefined;
       if (mode === 'url') {
         const url = document.getElementById('url-input').value.trim();
         if (!url) { showError('Please enter a URL.'); return null; }
-        return { url, voice, local };
+        return { url, voice, local, no_summary, words };
       } else {
         const text = document.getElementById('text-input').value.trim();
         const title = document.getElementById('title-input').value.trim() || undefined;
         if (!text) { showError('Please paste some article text.'); return null; }
-        return { text, title, voice, local };
+        return { text, title, voice, local, no_summary, words };
       }
     }
 

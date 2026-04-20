@@ -9,6 +9,7 @@ class ArticleInput(BaseModel):
     title: str | None = None
     cookies: dict[str, str] | None = None
     local: bool = False
+    no_summary: bool = False
 
     @model_validator(mode="after")
     def _require_source(self) -> "ArticleInput":
