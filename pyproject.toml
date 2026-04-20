@@ -32,6 +32,9 @@ dev = [
     "httpx",
     "ruff>=0.4",
 ]
+login = [
+    "playwright>=1.44",
+]
 
 [project.scripts]
 audio-articles = "audio_articles.cli.main:app"
