@@ -8,7 +8,13 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from audio_articles.core.exceptions import AudioArticlesError
 from audio_articles.core.fetcher import load_cookies_file
 from audio_articles.core.models import ArticleInput, QATurn
-from audio_articles.core.pipeline import run, run_full, run_full_from_file, save_audio
+from audio_articles.core.pipeline import (
+    run_full,
+    run_full_from_file,
+    save_audio,
+    save_companion_pdf,
+    save_manifest_for,
+)
 
 app = typer.Typer(
     name="audio-articles",
@@ -44,6 +50,7 @@ def convert(
     local: Annotated[bool, typer.Option("--local", "-l", help="Use Ollama + edge-tts (free, no API keys required).")] = False,
     no_summary: Annotated[bool, typer.Option("--no-summary", help="Skip summarization and convert the entire article verbatim to audio.")] = False,
     words: Annotated[int | None, typer.Option("--words", "-w", help="Target word count for the summary (overrides SCRIPT_WORD_TARGET env var).")] = None,
+    companion_pdf: Annotated[bool, typer.Option("--companion-pdf/--no-companion-pdf", help="Generate a companion PDF with code snippets and diagrams (URL articles only).")] = True,
 ) -> None:
     """
     Convert an article (URL, file, or inline text) to an MP3 audiobook.
@@ -84,21 +91,21 @@ def convert(
                 if not file.exists():
                     console.print(f"[red]Error:[/red] File not found: {file}")
                     raise typer.Exit(1)
-                if interactive or script_only:
-                    result, extraction = run_full_from_file(file, title=title, no_summary=no_summary)
-                else:
-                    from audio_articles.core.pipeline import run_from_file
-                    result = run_from_file(file, title=title, no_summary=no_summary)
+                result, extraction = run_full_from_file(file, title=title, no_summary=no_summary)
             else:
                 task_desc = "Fetching article and synthesizing audio…" if no_summary else "Fetching article, summarizing, and synthesizing audio…"
                 progress.add_task(task_desc)
                 loaded_cookies = load_cookies_file(cookies) if cookies else None
-                article_input = ArticleInput(url=url, text=text, title=title, cookies=loaded_cookies, local=local, no_summary=no_summary)
-                if interactive or script_only:
-                    result, extraction = run_full(article_input)
-                else:
-                    result = run(article_input)
-                    extraction = None
+                article_input = ArticleInput(
+                    url=url,
+                    text=text,
+                    title=title,
+                    cookies=loaded_cookies,
+                    local=local,
+                    no_summary=no_summary,
+                    companion_pdf=companion_pdf,
+                )
+                result, extraction = run_full(article_input)
     except AudioArticlesError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
@@ -112,15 +119,21 @@ def convert(
         console.print(result.script)
         console.print()
 
-    # Save the audio
+    # Save the audio (and, if generated, the companion PDF + manifest)
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(result.audio_bytes)
         saved = output
+        pdf_saved = None
     else:
         saved = save_audio(result, output_dir=output_dir)
+        pdf_saved = save_companion_pdf(result, output_dir=output_dir)
+        if extraction is not None:
+            save_manifest_for(result, extraction, saved, pdf_saved, output_dir=output_dir)
 
     console.print(f"[green]Saved:[/green] {saved}")
+    if pdf_saved:
+        console.print(f"[green]PDF:[/green]    {pdf_saved}")
     console.print(f"[dim]Title:[/dim]  {result.title}")
     console.print(f"[dim]Words:[/dim]  {len(result.script.split())}")
 

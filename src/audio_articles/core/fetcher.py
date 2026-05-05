@@ -5,8 +5,9 @@ from pathlib import Path
 import trafilatura
 from curl_cffi import requests as cffi_requests
 
+from .asset_extractor import extract_assets
 from .exceptions import ExtractionError
-from .models import ExtractionResult
+from .models import ArticleAssets, ExtractionResult
 
 # Matches: https://foo.substack.com/p/some-slug
 _SUBSTACK_POST_RE = re.compile(
@@ -109,6 +110,77 @@ def _get_full_session_cookies(url: str) -> list[dict] | None:
     return SessionStore().load(platform)
 
 
+def _acquire_raw_html(
+    url: str,
+    *,
+    timeout: float,
+    cookies: dict[str, str] | None,
+) -> tuple[str, str, str | None]:
+    """Fetch raw HTML for an article URL; handle Substack API, 403 + Cloudflare fallback.
+
+    Returns (raw_html, source_url, override_title).
+    For Substack URLs, raw_html is the API's body_html, source_url is the canonical
+    URL, and override_title is the Substack-supplied title. For other URLs, raw_html
+    is the full page HTML, source_url is the input url, and override_title is None
+    (trafilatura will infer the title from metadata).
+    """
+    m = _SUBSTACK_POST_RE.match(url)
+    if m:
+        base, slug = m.group(1), m.group(2)
+        api_url = f"{base}/api/v1/posts/{slug}"
+        raw = _fetch_html(api_url, timeout=timeout, cookies=cookies)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ExtractionError(f"Unexpected response from Substack API: {exc}") from exc
+        body_html = data.get("body_html") or ""
+        if not body_html:
+            raise ExtractionError(
+                f"No article body returned by Substack API for '{slug}'. "
+                "The post may require a paid subscription — pass --cookies with your session."
+            )
+        title = data.get("title") or slug
+        source_url = data.get("canonical_url") or f"{base}/p/{slug}"
+        return body_html, source_url, title
+
+    try:
+        raw_html = _fetch_html(url, timeout=timeout, cookies=cookies)
+    except ExtractionError as exc:
+        if "HTTP 403" not in str(exc):
+            raise
+        full_cookies = _get_full_session_cookies(url)
+        if full_cookies is None:
+            raise
+        raw_html = _fetch_html_playwright(url, timeout=timeout, cookies=full_cookies)
+
+    if _is_cloudflare_challenge(raw_html):
+        full_cookies = _get_full_session_cookies(url) or []
+        raw_html = _fetch_html_playwright(url, timeout=timeout, cookies=full_cookies)
+
+    return raw_html, url, None
+
+
+def _maybe_medium_refetch(
+    url: str,
+    raw_html: str,
+    word_count: int,
+    cookies: dict[str, str] | None,
+    *,
+    timeout: float,
+) -> tuple[str, dict[str, str] | None]:
+    """Re-fetch with saved Medium cookies if the page looks like a paywalled Medium custom domain.
+
+    Returns (possibly-new raw_html, possibly-new cookies). If no re-fetch is needed,
+    returns the originals unchanged.
+    """
+    if cookies is not None or word_count >= 200 or not _is_medium_html(raw_html):
+        return raw_html, cookies
+    medium_cookies = _get_medium_cookies()
+    if medium_cookies is None:
+        return raw_html, cookies
+    return _fetch_html(url, timeout=timeout, cookies=medium_cookies), medium_cookies
+
+
 def fetch_and_extract(
     url: str,
     *,
@@ -128,42 +200,52 @@ def fetch_and_extract(
     platform, the fetch is retried with headless Playwright (which passes JS-based
     bot-detection checks that TLS impersonation cannot).
     """
-    _cookies = cookies
-    if _cookies is None:
-        _cookies = _get_saved_cookies(url)
+    _cookies = cookies if cookies is not None else _get_saved_cookies(url)
+    raw_html, source_url, override_title = _acquire_raw_html(url, timeout=timeout, cookies=_cookies)
+    result = _build_extraction(raw_html, source_url=source_url, override_title=override_title)
 
-    m = _SUBSTACK_POST_RE.match(url)
-    if m:
-        return _fetch_substack_api(m.group(1), m.group(2), timeout=timeout, cookies=_cookies)
-
-    try:
-        raw_html = _fetch_html(url, timeout=timeout, cookies=_cookies)
-    except ExtractionError as exc:
-        if "HTTP 403" not in str(exc):
-            raise
-        full_cookies = _get_full_session_cookies(url)
-        if full_cookies is None:
-            raise
-        raw_html = _fetch_html_playwright(url, timeout=timeout, cookies=full_cookies)
-
-    # Cloudflare challenge pages are served as HTTP 200 but contain no article
-    # content. Playwright executes the real browser JS challenge to get past them.
-    if _is_cloudflare_challenge(raw_html):
-        full_cookies = _get_full_session_cookies(url) or []
-        raw_html = _fetch_html_playwright(url, timeout=timeout, cookies=full_cookies)
-
-    result = _extract_from_html(raw_html, source_url=url)
-
-    # Post-fetch: unknown Medium custom domain detection.
-    # Only triggered when no cookies were applied (_cookies is None) and the
-    # content is suspiciously short with Medium HTML markers present.
-    if _cookies is None and result.word_count < 200 and _is_medium_html(raw_html):
-        medium_cookies = _get_medium_cookies()
-        if medium_cookies is not None:
-            raw_html = _fetch_html(url, timeout=timeout, cookies=medium_cookies)
-            result = _extract_from_html(raw_html, source_url=url)
-
+    if override_title is None:
+        new_html, _ = _maybe_medium_refetch(
+            url, raw_html, result.word_count, _cookies, timeout=timeout
+        )
+        if new_html is not raw_html:
+            result = _build_extraction(new_html, source_url=source_url, override_title=None)
     return result
+
+
+def fetch_with_assets(
+    url: str,
+    output_dir: Path,
+    *,
+    timeout: float = 20.0,
+    cookies: dict[str, str] | None = None,
+) -> tuple[ExtractionResult, ArticleAssets]:
+    """Fetch the article and capture companion-PDF assets.
+
+    Like ``fetch_and_extract`` but additionally returns ``ArticleAssets`` (code
+    blocks + downloaded images) and substitutes ``(See code block N…)`` /
+    ``(See figure N…)`` markers into the extracted body text in place of the
+    original structured elements. Both summary and no-summary audio paths
+    therefore contain natural references to the PDF.
+    """
+    _cookies = cookies if cookies is not None else _get_saved_cookies(url)
+    raw_html, source_url, override_title = _acquire_raw_html(url, timeout=timeout, cookies=_cookies)
+
+    # Only probe for Medium re-fetch if the heuristic could trigger; avoids a wasted
+    # trafilatura run on every non-Medium article.
+    if override_title is None and _cookies is None and _is_medium_html(raw_html):
+        probe = _build_extraction(raw_html, source_url=source_url, override_title=None)
+        raw_html, _cookies = _maybe_medium_refetch(
+            url, raw_html, probe.word_count, _cookies, timeout=timeout
+        )
+
+    assets, marker_html = extract_assets(
+        raw_html, base_url=source_url, output_dir=output_dir, cookies=_cookies
+    )
+    extraction = _build_extraction(
+        marker_html, source_url=source_url, override_title=override_title
+    )
+    return extraction, assets
 
 
 def _fetch_substack_api(
@@ -173,40 +255,11 @@ def _fetch_substack_api(
     timeout: float,
     cookies: dict[str, str] | None,
 ) -> ExtractionResult:
-    api_url = f"{base}/api/v1/posts/{slug}"
-    raw = _fetch_html(api_url, timeout=timeout, cookies=cookies)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ExtractionError(f"Unexpected response from Substack API: {exc}") from exc
-
-    title = data.get("title") or slug
-    body_html = data.get("body_html") or ""
-    if not body_html:
-        raise ExtractionError(
-            f"No article body returned by Substack API for '{slug}'. "
-            "The post may require a paid subscription — pass --cookies with your session."
-        )
-
-    body = trafilatura.extract(
-        body_html,
-        include_comments=False,
-        include_tables=False,
-        favor_recall=True,
-        output_format="txt",
-    ) or ""
-    if not body:
-        # Fallback: strip HTML tags manually
-        body = re.sub(r"<[^>]+>", " ", body_html)
-        body = re.sub(r"\s+", " ", body).strip()
-
-    source_url = data.get("canonical_url") or f"{base}/p/{slug}"
-    return ExtractionResult(
-        title=title,
-        body=body,
-        source_url=source_url,
-        word_count=len(body.split()),
+    """Legacy entry point preserved for tests; delegates through the shared helpers."""
+    raw_html, source_url, title = _acquire_raw_html(
+        f"{base}/p/{slug}", timeout=timeout, cookies=cookies
     )
+    return _build_extraction(raw_html, source_url=source_url, override_title=title)
 
 
 def extract_from_text(text: str, title: str = "Article") -> ExtractionResult:
@@ -244,11 +297,15 @@ def _fetch_html(url: str, *, timeout: float, cookies: dict[str, str] | None = No
         raise ExtractionError(f"Network error fetching {url}: {exc}") from exc
 
 
-def _extract_from_html(raw_html: str, source_url: str) -> ExtractionResult:
-    # trafilatura returns a Document object when output_format="xml" or with_metadata=True,
-    # but returns a plain string for output_format="txt" without metadata.
-    # We call twice: once for metadata, once for clean text.
-    metadata = trafilatura.extract_metadata(raw_html, default_url=source_url)
+def _build_extraction(
+    raw_html: str, *, source_url: str, override_title: str | None
+) -> ExtractionResult:
+    """Run trafilatura on (possibly marker-injected) HTML and produce ExtractionResult.
+
+    ``override_title`` short-circuits trafilatura metadata extraction and is used
+    for Substack, where the API gives us a clean title and the body_html fragment
+    has no <title> for trafilatura to find.
+    """
     body = trafilatura.extract(
         raw_html,
         include_comments=False,
@@ -257,14 +314,27 @@ def _extract_from_html(raw_html: str, source_url: str) -> ExtractionResult:
         output_format="txt",
         url=source_url,
     )
-
+    if not body:
+        # Fragment fallback: strip tags manually when trafilatura's heuristics give up.
+        body = re.sub(r"<[^>]+>", " ", raw_html)
+        body = re.sub(r"\s+", " ", body).strip()
     if not body:
         raise ExtractionError(f"Could not extract article content from {source_url}")
 
-    title = (metadata.title if metadata and metadata.title else None) or source_url
+    if override_title:
+        title = override_title
+    else:
+        metadata = trafilatura.extract_metadata(raw_html, default_url=source_url)
+        title = (metadata.title if metadata and metadata.title else None) or source_url
+
     return ExtractionResult(
         title=title,
         body=body,
         source_url=source_url,
         word_count=len(body.split()),
     )
+
+
+def _extract_from_html(raw_html: str, source_url: str) -> ExtractionResult:
+    """Backwards-compatible alias preserved for any external callers."""
+    return _build_extraction(raw_html, source_url=source_url, override_title=None)

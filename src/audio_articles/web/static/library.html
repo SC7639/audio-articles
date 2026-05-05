@@ -67,7 +67,11 @@
     }
     .file-meta span { display: flex; align-items: center; gap: 0.3rem; }
     audio { width: 100%; margin-bottom: 1rem; }
+    .download-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .download-btn { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; }
+    .download-btn.secondary { background: var(--pico-secondary-background); border-color: var(--pico-secondary-border); }
+    .source-link { font-size: 0.85rem; color: var(--pico-muted-color); margin-bottom: 0.75rem; word-break: break-all; }
+    .source-link a { color: var(--pico-primary); }
     .empty-state { text-align: center; padding: 3rem 1rem; color: var(--pico-muted-color); }
     .empty-state p { margin-bottom: 0.5rem; }
     #loading { text-align: center; padding: 2rem; color: var(--pico-muted-color); }
@@ -119,21 +123,37 @@
         }
 
         fileList.style.display = 'block';
-        fileList.innerHTML = files.map(f => `
-          <details>
-            <summary>${escapeHtml(f.name)}</summary>
-            <div class="accordion-body">
-              <div class="file-meta">
-                <span>&#128190; ${formatBytes(f.size_bytes)}</span>
-                <span>&#128337; ${formatDate(f.created_at)}</span>
+        fileList.innerHTML = files.map(f => {
+          const metaParts = [
+            `<span>&#128190; ${formatBytes(f.size_bytes)}</span>`,
+            `<span>&#128337; ${formatDate(f.created_at)}</span>`,
+          ];
+          if (f.pdf_url && f.pdf_size_bytes) {
+            metaParts.push(`<span>&#128196; PDF ${formatBytes(f.pdf_size_bytes)}</span>`);
+          }
+          const sourceLine = f.source_url
+            ? `<p class="source-link">Source: <a href="${escapeAttr(f.source_url)}" target="_blank" rel="noopener">${escapeHtml(f.source_url)}</a></p>`
+            : '';
+          const pdfButton = f.pdf_url
+            ? `<a href="${escapeAttr(f.pdf_url)}" download class="download-btn secondary" role="button">&#128196; Download PDF</a>`
+            : '';
+          return `
+            <details>
+              <summary>${escapeHtml(f.name)}</summary>
+              <div class="accordion-body">
+                <div class="file-meta">${metaParts.join('')}</div>
+                ${sourceLine}
+                <audio controls preload="none" src="${f.url}"></audio>
+                <div class="download-row">
+                  <a href="${f.url}" download="${escapeAttr(f.filename)}" class="download-btn" role="button">
+                    &#8615; Download MP3
+                  </a>
+                  ${pdfButton}
+                </div>
               </div>
-              <audio controls preload="none" src="${f.url}"></audio>
-              <a href="${f.url}" download="${escapeAttr(f.filename)}" class="download-btn" role="button">
-                &#8615; Download MP3
-              </a>
-            </div>
-          </details>
-        `).join('');
+            </details>
+          `;
+        }).join('');
       } catch (err) {
         loading.style.display = 'none';
         errorMsg.style.display = 'block';
