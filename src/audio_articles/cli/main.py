@@ -1,7 +1,10 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
@@ -14,6 +17,7 @@ from audio_articles.core.pipeline import (
     save_audio,
     save_companion_pdf,
     save_manifest_for,
+    unique_stem,
 )
 
 app = typer.Typer(
@@ -139,6 +143,141 @@ def convert(
 
     if interactive and extraction:
         _qa_repl(extraction)
+
+
+@app.command()
+def batch(
+    file: Annotated[
+        Path,
+        typer.Argument(
+            help="Text file with one URL per line. Lines starting with # are ignored; blank lines skipped.",
+        ),
+    ],
+    output_dir: Annotated[
+        str | None,
+        typer.Option("--output-dir", help="Directory to save MP3s (and companion PDFs)."),
+    ] = None,
+    voice: VoiceOption = None,
+    words: Annotated[
+        int | None,
+        typer.Option("--words", "-w", help="Target word count for each summary (overrides SCRIPT_WORD_TARGET)."),
+    ] = None,
+    cookies: Annotated[
+        Path | None,
+        typer.Option("--cookies", "-c", help="Netscape cookie file applied to every URL in the batch."),
+    ] = None,
+    local: Annotated[
+        bool,
+        typer.Option("--local", "-l", help="Use Ollama + edge-tts for every URL (free, no API keys required)."),
+    ] = False,
+    no_summary: Annotated[
+        bool,
+        typer.Option("--no-summary", help="Skip summarization and convert each article verbatim to audio."),
+    ] = False,
+    companion_pdf: Annotated[
+        bool,
+        typer.Option("--companion-pdf/--no-companion-pdf", help="Generate companion PDFs alongside MP3s."),
+    ] = True,
+    concurrency: Annotated[
+        int,
+        typer.Option("--concurrency", "-j", min=1, help="Number of URLs to process in parallel. Default 1 (sequential)."),
+    ] = 1,
+) -> None:
+    """
+    Convert a list of URLs to MP3 audiobooks in batch.
+
+    Reads URLs from a plain-text file (one per line). Lines starting with `#`
+    are ignored as comments, blank lines are skipped. Each URL is processed
+    through the same pipeline as `convert`. Failures are reported at the end
+    without aborting the rest of the batch; exit code is 1 if any URL failed.
+
+    Examples:
+
+      audio-articles batch urls.txt
+
+      audio-articles batch urls.txt --output-dir ./out --concurrency 3
+
+      audio-articles batch urls.txt --no-companion-pdf --local
+    """
+    if not file.exists():
+        console.print(f"[red]Error:[/red] File not found: {file}")
+        raise typer.Exit(1)
+
+    urls = _read_url_list(file)
+    if not urls:
+        console.print(f"[red]Error:[/red] No URLs found in {file}.")
+        raise typer.Exit(1)
+
+    from audio_articles.core.config import get_settings
+
+    settings = get_settings()
+    if voice:
+        object.__setattr__(settings, "tts_voice", voice)
+    if words:
+        object.__setattr__(settings, "script_word_target", words)
+
+    loaded_cookies = load_cookies_file(cookies) if cookies else None
+    out_dir = Path(output_dir or settings.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    reserved: set[Path] = set()
+    reserved_lock = threading.Lock()
+
+    def _process_one(url: str) -> tuple[str, Path | None, str | None]:
+        """Run the pipeline + save outputs for one URL. Returns (url, audio_path, error)."""
+        try:
+            article_input = ArticleInput(
+                url=url,
+                cookies=loaded_cookies,
+                local=local,
+                no_summary=no_summary,
+                companion_pdf=companion_pdf,
+            )
+        except ValidationError as exc:
+            return (url, None, f"invalid URL: {exc.errors()[0].get('msg', 'validation error')}")
+
+        try:
+            result, extraction = run_full(article_input)
+        except AudioArticlesError as exc:
+            return (url, None, str(exc))
+
+        stem = unique_stem(result.title, out_dir, reserved, reserved_lock)
+        audio_path = save_audio(result, output_dir=str(out_dir), stem=stem)
+        pdf_path = save_companion_pdf(result, output_dir=str(out_dir), stem=stem)
+        save_manifest_for(result, extraction, audio_path, pdf_path, output_dir=str(out_dir))
+        return (url, audio_path, None)
+
+    n_total = len(urls)
+    succeeded: list[tuple[str, Path]] = []
+    failed: list[tuple[str, str]] = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task_id = progress.add_task(f"Processing 0/{n_total}…", total=n_total)
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {executor.submit(_process_one, url): url for url in urls}
+            done = 0
+            for future in as_completed(futures):
+                done += 1
+                url, audio_path, err = future.result()
+                progress.update(task_id, advance=1, description=f"Processing {done}/{n_total}…")
+                if err is None and audio_path is not None:
+                    succeeded.append((url, audio_path))
+                    progress.console.print(f"[green]✓[/] [{done}/{n_total}] {audio_path.name}")
+                else:
+                    failed.append((url, err or "unknown error"))
+                    progress.console.print(f"[red]✗[/] [{done}/{n_total}] {url}: {err}")
+
+    console.print()
+    console.print(f"[bold]Done.[/bold] {len(succeeded)} succeeded, {len(failed)} failed.")
+    if failed:
+        console.print("\n[red]Failed URLs:[/red]")
+        for url, err in failed:
+            console.print(f"  • {url}\n    [dim]{err}[/dim]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -283,6 +422,17 @@ def logout(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _read_url_list(path: Path) -> list[str]:
+    """Read URLs from a plain-text file. Skip blank lines and lines starting with #."""
+    urls: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        urls.append(line)
+    return urls
 
 
 def _qa_repl(extraction) -> None:

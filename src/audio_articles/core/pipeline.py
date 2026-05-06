@@ -2,6 +2,7 @@ import logging
 import re
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 from .companion_pdf import CompanionPdfError, render_companion_pdf
@@ -28,6 +29,32 @@ _LOG = logging.getLogger(__name__)
 def safe_stem(title: str) -> str:
     """Compute the disk-safe stem used for both `<title>.mp3` and `<title>.pdf`."""
     return re.sub(r"[^\w\-]", "_", title)[:60]
+
+
+def unique_stem(
+    title: str,
+    output_dir: str | Path,
+    reserved: set[Path],
+    lock: threading.Lock,
+) -> str:
+    """Pick a stem that won't collide with existing or already-reserved MP3 paths.
+
+    Reserves `<output_dir>/<stem>.mp3` in `reserved` so concurrent callers won't
+    pick the same path. Append `_2`, `_3`, … on collision. Caller is responsible
+    for sharing the same `reserved` set and `lock` across workers in a batch.
+    """
+    out = Path(output_dir)
+    base = safe_stem(title) or "audio"
+    with lock:
+        candidate = base
+        path = out / f"{candidate}.mp3"
+        i = 2
+        while path.exists() or path in reserved:
+            candidate = f"{base}_{i}"
+            path = out / f"{candidate}.mp3"
+            i += 1
+        reserved.add(path)
+    return candidate
 
 
 def run_full(article_input: ArticleInput) -> tuple[AudiobookResult, ExtractionResult]:
@@ -154,19 +181,30 @@ def run_from_file(path: Path, title: str | None = None, no_summary: bool = False
     return result
 
 
-def save_audio(result: AudiobookResult, output_dir: str | None = None) -> Path:
-    """Write MP3 bytes to disk. Returns the file path written."""
+def save_audio(
+    result: AudiobookResult,
+    output_dir: str | None = None,
+    stem: str | None = None,
+) -> Path:
+    """Write MP3 bytes to disk. Returns the file path written.
+
+    If `stem` is provided, use it verbatim as the filename stem; otherwise derive
+    it from the title via ``safe_stem``. The `stem` override is used by batch
+    processing to avoid filename collisions when multiple articles share a title.
+    """
     settings = get_settings()
     out = Path(output_dir or settings.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    safe_title = safe_stem(result.title)
+    safe_title = stem if stem is not None else safe_stem(result.title)
     path = out / f"{safe_title}.mp3"
     path.write_bytes(result.audio_bytes)
     return path
 
 
 def save_companion_pdf(
-    result: AudiobookResult, output_dir: str | None = None
+    result: AudiobookResult,
+    output_dir: str | None = None,
+    stem: str | None = None,
 ) -> Path | None:
     """Write companion PDF bytes (if any) next to the MP3. Returns path or None."""
     if result.companion_pdf_bytes is None:
@@ -174,7 +212,7 @@ def save_companion_pdf(
     settings = get_settings()
     out = Path(output_dir or settings.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    safe_title = safe_stem(result.title)
+    safe_title = stem if stem is not None else safe_stem(result.title)
     path = out / f"{safe_title}.pdf"
     path.write_bytes(result.companion_pdf_bytes)
     return path
