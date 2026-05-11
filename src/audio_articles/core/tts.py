@@ -11,6 +11,12 @@ from .models import ScriptResult
 # OpenAI TTS supports roughly 4096 tokens (~3000 words) per request.
 _WORD_LIMIT = 2800
 
+# edge-tts has a much smaller practical per-request cap (the Microsoft endpoint
+# truncates long inputs around ~3000-4000 chars). Empirically, scripts over
+# ~600-700 words come back with silent tails. Chunk conservatively well below
+# that and join the MP3 frames.
+_EDGE_WORD_LIMIT = 500
+
 
 def synthesize(script_result: ScriptResult, *, local: bool = False) -> bytes:
     """Convert a ScriptResult to MP3 audio bytes.
@@ -35,10 +41,22 @@ def synthesize(script_result: ScriptResult, *, local: bool = False) -> bytes:
 
 
 def _synthesize_edge(text: str) -> bytes:
-    """Synthesize speech using edge-tts (Microsoft neural voices, free)."""
+    """Synthesize speech using edge-tts (Microsoft neural voices, free).
+
+    Long scripts are split at sentence boundaries because the Microsoft TTS
+    endpoint silently truncates inputs longer than ~3-4k characters.
+    """
     settings = get_settings()
     voice = settings.edge_tts_voice
 
+    if len(text.split()) <= _EDGE_WORD_LIMIT:
+        return _edge_call(text, voice)
+
+    segments = _split_at_sentences(text, _EDGE_WORD_LIMIT)
+    return b"".join(_edge_call(seg, voice) for seg in segments)
+
+
+def _edge_call(text: str, voice: str) -> bytes:
     async def _run() -> bytes:
         communicate = edge_tts.Communicate(text, voice)
         chunks: list[bytes] = []
