@@ -113,6 +113,16 @@ audio-articles convert --file article.txt
 audio-articles convert --text "Paste your article here..."
 ```
 
+### Supported inputs
+
+| Source | Notes |
+|---|---|
+| URL (`--url`) | Any HTML page. Extraction is handled by [trafilatura](https://github.com/adbar/trafilatura). |
+| Text file (`--file`) | Plain `.txt` only. |
+| Inline text (`--text`) | Pass the article body directly on the command line. |
+
+> **PDFs are not supported directly** — trafilatura is HTML-only. To process a PDF, extract its text to a plain `.txt` file first (using whichever PDF-to-text tool you prefer), then pass the resulting file with `--file`.
+
 ### Options
 
 | Flag | Description | Default |
@@ -126,6 +136,8 @@ audio-articles convert --text "Paste your article here..."
 | `--interactive / -i` | Enter Q&A mode after converting | off |
 | `--local / -l` | Use Ollama + edge-tts (free, no API keys) | off |
 | `--cookies / -c` | Netscape cookie file for paywalled articles | — |
+| `--words / -w` | Target word count for the summary (overrides `SCRIPT_WORD_TARGET`) | `400` |
+| `--no-summary` | Skip summarisation; narrate the article verbatim | off |
 
 ### Available voices
 
@@ -133,6 +145,18 @@ audio-articles convert --text "Paste your article here..."
 
 ```bash
 audio-articles convert --url https://example.com/article --voice nova
+```
+
+### Control summary length
+
+Default is ~400 words. Override per-invocation with `--words / -w`, or set `SCRIPT_WORD_TARGET` in `.env` for a persistent default. Pass `--no-summary` to skip the summariser entirely and narrate the source verbatim — useful for sources where exact wording or structure matters (e.g. academic articles, transcripts).
+
+```bash
+# Longer summary for dense content
+audio-articles convert --url https://example.com/article --words 1200
+
+# Skip summarisation; narrate verbatim
+audio-articles convert --url https://example.com/article --no-summary
 ```
 
 ### Preview the script without generating audio
