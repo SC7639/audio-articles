@@ -218,12 +218,32 @@ def save_companion_pdf(
     return path
 
 
+def save_script(
+    result: AudiobookResult,
+    output_dir: str | None = None,
+    stem: str | None = None,
+) -> Path:
+    """Write the script text as a markdown file next to the MP3."""
+    settings = get_settings()
+    out = Path(output_dir or settings.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    safe_title = stem if stem is not None else safe_stem(result.title)
+    path = out / f"{safe_title}.md"
+    lines = [f"# {result.title}", ""]
+    if result.source_url:
+        lines += [f"Source: <{result.source_url}>", ""]
+    lines += [result.script, ""]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
 def save_manifest_for(
     result: AudiobookResult,
     extraction: ExtractionResult,
     audio_path: Path,
     pdf_path: Path | None,
     output_dir: str | None = None,
+    script_path: Path | None = None,
 ) -> Path:
     """Write the sidecar JSON manifest next to the MP3."""
     settings = get_settings()
@@ -234,7 +254,9 @@ def save_manifest_for(
         source_url=result.source_url,
         audio_filename=audio_path.name,
         pdf_filename=pdf_path.name if pdf_path else None,
+        script_filename=script_path.name if script_path else None,
         generated_at=now_iso(),
         word_count=extraction.word_count,
+        script_word_count=len(result.script.split()),
     )
     return write_manifest(manifest, out, stem)

@@ -15,8 +15,13 @@ _SYSTEM_PROMPT = """\
 You are an expert audiobook narrator and editor. Your job is to transform article \
 text into a spoken-word script that is concise, clear, and engaging to listen to.
 
-Rules:
-- Target approximately {word_target} words for the final script.
+CRITICAL LENGTH REQUIREMENT — this is the most important rule:
+- Your final script MUST be at least {lower_bound} words and at most {upper_bound} words.
+- A script shorter than {lower_bound} words is an unacceptable failure, no matter how good the writing is.
+- Use the full word budget. Expand explanations with more detail, develop examples drawn from the source, weave in spoken transitions, and pace the narrative.
+- Before returning, check your script length. If you are under {lower_bound} words, go back and expand the weakest paragraph with additional detail from the source article until you reach the target.
+
+Other rules:
 - Write in full, flowing sentences — no bullet points, no headers, no markdown.
 - Preserve the core argument and the most compelling evidence or examples.
 - Open with a hook sentence that names the topic and why it matters.
@@ -42,8 +47,9 @@ Use full prose sentences, not bullet points. Be concise.
 
 _REDUCE_USER = """\
 You have been given a series of section summaries from an article titled "{title}". \
-Synthesize them into a single, cohesive audiobook script of approximately {word_target} words. \
-Follow the output rules in your system prompt.
+Synthesize them into a single, cohesive audiobook script. The script MUST be between \
+{lower_bound} and {upper_bound} words — this is a strict requirement, not a suggestion. \
+Follow all output rules in your system prompt, especially the length requirement.
 
 {summaries}"""
 
@@ -132,8 +138,21 @@ def _call_llm(
     return content.strip()
 
 
+def _word_target_bounds(word_target: int) -> tuple[int, int]:
+    """Return (lower, upper) inclusive bounds for the strict length requirement.
+
+    Asymmetric on purpose: smaller local models tend to undershoot, so we leave
+    more room above the target than below to push them toward the goal without
+    making the upper bound feel artificially tight.
+    """
+    lower = max(50, word_target - 100)
+    upper = word_target + 200
+    return lower, upper
+
+
 def _single_call_llm(client: OpenAI, body: str, title: str, settings) -> str:
-    system = _SYSTEM_PROMPT.format(word_target=settings.script_word_target)
+    lower, upper = _word_target_bounds(settings.script_word_target)
+    system = _SYSTEM_PROMPT.format(lower_bound=lower, upper_bound=upper)
     user_msg = f'Article title: "{title}"\n\nArticle text:\n{body}'
     return _call_llm(client, system, user_msg, settings)
 
@@ -144,10 +163,12 @@ def _chunk_summary_llm(client: OpenAI, chunk: str, settings) -> str:
 
 
 def _reduce_call_llm(client: OpenAI, summaries: str, title: str, settings) -> str:
-    system = _SYSTEM_PROMPT.format(word_target=settings.script_word_target)
+    lower, upper = _word_target_bounds(settings.script_word_target)
+    system = _SYSTEM_PROMPT.format(lower_bound=lower, upper_bound=upper)
     user_msg = _REDUCE_USER.format(
         title=title,
-        word_target=settings.script_word_target,
+        lower_bound=lower,
+        upper_bound=upper,
         summaries=summaries,
     )
     return _call_llm(client, system, user_msg, settings)
@@ -159,7 +180,8 @@ def _reduce_call_llm(client: OpenAI, summaries: str, title: str, settings) -> st
 
 
 def _single_call(client: Anthropic, body: str, title: str, settings) -> str:
-    system = _SYSTEM_PROMPT.format(word_target=settings.script_word_target)
+    lower, upper = _word_target_bounds(settings.script_word_target)
+    system = _SYSTEM_PROMPT.format(lower_bound=lower, upper_bound=upper)
     user_msg = f'Article title: "{title}"\n\nArticle text:\n{body}'
     return _call_claude(client, system, user_msg, settings)
 
@@ -170,10 +192,12 @@ def _chunk_summary(client: Anthropic, chunk: str, settings) -> str:
 
 
 def _reduce_call(client: Anthropic, summaries: str, title: str, settings) -> str:
-    system = _SYSTEM_PROMPT.format(word_target=settings.script_word_target)
+    lower, upper = _word_target_bounds(settings.script_word_target)
+    system = _SYSTEM_PROMPT.format(lower_bound=lower, upper_bound=upper)
     user_msg = _REDUCE_USER.format(
         title=title,
-        word_target=settings.script_word_target,
+        lower_bound=lower,
+        upper_bound=upper,
         summaries=summaries,
     )
     return _call_claude(client, system, user_msg, settings)

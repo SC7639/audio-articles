@@ -17,6 +17,7 @@ from audio_articles.core.pipeline import (
     save_audio,
     save_companion_pdf,
     save_manifest_for,
+    save_script,
     unique_stem,
 )
 
@@ -123,21 +124,32 @@ def convert(
         console.print(result.script)
         console.print()
 
-    # Save the audio (and, if generated, the companion PDF + manifest)
+    # Save the audio (and, if generated, the companion PDF + script + manifest)
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(result.audio_bytes)
         saved = output
         pdf_saved = None
+        script_saved = None
     else:
         saved = save_audio(result, output_dir=output_dir)
         pdf_saved = save_companion_pdf(result, output_dir=output_dir)
+        script_saved = save_script(result, output_dir=output_dir)
         if extraction is not None:
-            save_manifest_for(result, extraction, saved, pdf_saved, output_dir=output_dir)
+            save_manifest_for(
+                result,
+                extraction,
+                saved,
+                pdf_saved,
+                output_dir=output_dir,
+                script_path=script_saved,
+            )
 
     console.print(f"[green]Saved:[/green] {saved}")
     if pdf_saved:
         console.print(f"[green]PDF:[/green]    {pdf_saved}")
+    if script_saved:
+        console.print(f"[green]Script:[/green] {script_saved}")
     console.print(f"[dim]Title:[/dim]  {result.title}")
     console.print(f"[dim]Words:[/dim]  {len(result.script.split())}")
 
@@ -244,7 +256,15 @@ def batch(
         stem = unique_stem(result.title, out_dir, reserved, reserved_lock)
         audio_path = save_audio(result, output_dir=str(out_dir), stem=stem)
         pdf_path = save_companion_pdf(result, output_dir=str(out_dir), stem=stem)
-        save_manifest_for(result, extraction, audio_path, pdf_path, output_dir=str(out_dir))
+        script_path = save_script(result, output_dir=str(out_dir), stem=stem)
+        save_manifest_for(
+            result,
+            extraction,
+            audio_path,
+            pdf_path,
+            output_dir=str(out_dir),
+            script_path=script_path,
+        )
         return (url, audio_path, None)
 
     n_total = len(urls)

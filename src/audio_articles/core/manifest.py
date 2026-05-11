@@ -19,8 +19,10 @@ class ArticleManifest(BaseModel):
     source_url: str | None = None
     audio_filename: str
     pdf_filename: str | None = None
+    script_filename: str | None = None
     generated_at: str
     word_count: int
+    script_word_count: int | None = None
 
 
 def now_iso() -> str:

@@ -33,6 +33,46 @@ def test_synthesize_local_does_not_call_openai(sample_script_result, mocker):
     mock_openai.assert_not_called()
 
 
+def test_synthesize_edge_chunks_long_scripts(mocker):
+    """A script over the edge-tts word limit must be split into multiple calls
+    and the MP3 byte streams concatenated, so the audio is not truncated."""
+    from audio_articles.core.tts import _EDGE_WORD_LIMIT, _synthesize_edge
+
+    long_script = " ".join(["word."] * (_EDGE_WORD_LIMIT * 3))  # 3 chunks worth
+    mock_call = mocker.patch(
+        "audio_articles.core.tts._edge_call",
+        side_effect=[b"AAA", b"BBB", b"CCC"],
+    )
+    mocker.patch(
+        "audio_articles.core.tts.get_settings",
+        return_value=mocker.MagicMock(edge_tts_voice="en-GB-RyanNeural"),
+    )
+
+    result = _synthesize_edge(long_script)
+
+    assert mock_call.call_count == 3
+    assert result == b"AAABBBCCC"
+
+
+def test_synthesize_edge_short_script_single_call(mocker):
+    """A script under the limit must not be split (no concatenation overhead)."""
+    from audio_articles.core.tts import _synthesize_edge
+
+    mock_call = mocker.patch(
+        "audio_articles.core.tts._edge_call",
+        return_value=b"audio",
+    )
+    mocker.patch(
+        "audio_articles.core.tts.get_settings",
+        return_value=mocker.MagicMock(edge_tts_voice="en-GB-RyanNeural"),
+    )
+
+    result = _synthesize_edge("Short script. Just a few words.")
+
+    assert mock_call.call_count == 1
+    assert result == b"audio"
+
+
 def test_synthesize_cloud_calls_openai(sample_script_result, mocker):
     """synthesize(local=False) should use the OpenAI TTS path."""
     mocker.patch(
