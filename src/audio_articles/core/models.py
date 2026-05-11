@@ -10,6 +10,7 @@ class ArticleInput(BaseModel):
     cookies: dict[str, str] | None = None
     local: bool = False
     no_summary: bool = False
+    companion_pdf: bool = True
 
     @model_validator(mode="after")
     def _require_source(self) -> "ArticleInput":
@@ -25,6 +26,27 @@ class ExtractionResult(BaseModel):
     word_count: int
 
 
+class CodeBlock(BaseModel):
+    content: str
+    language: str | None = None
+
+
+class ImageAsset(BaseModel):
+    local_filename: str
+    alt_text: str | None = None
+    caption: str | None = None
+    is_svg: bool = False
+
+
+class ArticleAssets(BaseModel):
+    code_blocks: list[CodeBlock] = []
+    images: list[ImageAsset] = []
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.code_blocks or self.images)
+
+
 class ScriptResult(BaseModel):
     script: str
     word_count: int
@@ -37,6 +59,7 @@ class AudiobookResult(BaseModel):
     title: str
     source_url: str | None = None
     format: str = "mp3"
+    companion_pdf_bytes: bytes | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 

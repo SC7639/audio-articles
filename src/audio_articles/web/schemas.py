@@ -11,6 +11,7 @@ class ConvertRequest(BaseModel):
     local: bool = False
     no_summary: bool = False
     words: int | None = None
+    companion_pdf: bool = True
 
 
 class ScriptResponse(BaseModel):
@@ -19,6 +20,7 @@ class ScriptResponse(BaseModel):
     word_count: int
     source_url: str | None = None
     chunks_used: int
+    companion_pdf_url: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -39,3 +41,6 @@ class FileInfo(BaseModel):
     size_bytes: int
     created_at: str
     url: str
+    pdf_url: str | None = None
+    pdf_size_bytes: int | None = None
+    source_url: str | None = None

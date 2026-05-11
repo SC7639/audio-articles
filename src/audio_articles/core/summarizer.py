@@ -23,6 +23,13 @@ Rules:
 - Close with the article's main takeaway or call-to-action.
 - Use natural spoken transitions ("What's more,", "Here's why that matters:", etc.).
 - Do not add information that is not in the source article.
+- If the source contains parenthetical markers like "(See code block N in the companion \
+PDF.)" or "(See figure N in the companion PDF.)", treat them as cues that the listener \
+has a paired PDF open. When you discuss the related content, mention the companion PDF \
+reference naturally (e.g., "as code block 2 in the companion PDF shows" or "the diagram \
+in the companion PDF illustrates this"). You may omit a marker entirely if the topic \
+isn't covered in your summary, but never invent or renumber references — keep the \
+original numbers from the source.
 - Return ONLY the script text, with no preamble or metadata."""
 
 _CHUNK_SUMMARY_SYSTEM = "You are a precise summarizer. Condense the given text into its most important points using plain prose sentences."
